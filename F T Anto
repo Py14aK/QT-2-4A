@@ -1,0 +1,527 @@
+I'll create a Word document with all the questions and answers, keeping the formatting with red text for the correct answers. Since I can't directly create files, I'll provide you with the content in a format that you can easily copy and paste into Microsoft Word.
+
+Here's the content formatted for Word:
+
+---
+
+T24 FUNDS TRANSFER EXAMINATION QUESTIONS
+
+---
+
+Question 1
+A merchant does a normal debit reservation to a customer for $1000. Assuming the customer has $9000 in his account, what would be the balance after the reservation?
+
+A) Since the reservation was done by a merchant, this transaction will be considered as merchant return and the balance will remain to be in $9000
+
+B) <span style="color:red">This reservation will be executed and the customer balance will be $8000.</span>
+
+C) Transact will reject this reservation since merchant are not allowed to do normal reservation.
+
+D) None of the above.
+
+---
+
+Question 2
+A Bank wants to default the Value date of transactions of debit and credit accounts of same currency as System date for its AC type of FUNDS.TRANSFER. How can this be parameterised in FT.TXN.TYPE.CONDITION?
+
+A) PAYMENT.TYPE Field should be set as "NOCONV" and PAYMENT.VALUE Field should be set as "Y"
+
+B) <span style="color:red">PAYMENT.TYPE Field should be set as "NOCONV" and PAYMENT.VALUE Field should be set as "N" or "NO"</span>
+
+C) PAYMENT.TYPE Field should be set as "CONV" and PAYMENT.VALUE Field should be set as "N" or "NO"
+
+D) PAYMENT.TYPE Field should be set as "ALL" and PAYMENT.VALUE Field should be set as "N" or "NO"
+
+E) PAYMENT.TYPE Field should be set as "ALL" and PAYMENT.VALUE Field should set as "N" or "NO"
+
+---
+
+Question 3
+A Bank has parameterised DATES File to have 7 days as FORW.VALUE.MAXIMUM and "+03W+02C" in FOR.W.VALUE.MAXIMUM Field of FT.TXN.TYPE.CONDITION for BC type of transactions. Will T24 accept a future value date which is 8 days in future?
+
+A) No. This is not in line with the rule set in FT.TXN.TYPE.CONDITION, though it is in line with rules set in DATES table. Hence transaction will not be allowed
+
+B) Yes. This is not in line with rule set [DATES File as well as FT.TXN.TYPE.CONDITION File]. Overrides will be generated
+
+C) <span style="color:red">No. This could be in line with rule set in FT.TXN.TYPE.CONDITION. But, this is not in line with rule set in DATES table. DATES table rules will be applied even if FT.TXN.TYPE.CONDITION rules permit. The transaction will not be allowed</span>
+
+D) Yes. This could be in line with rule set in FT.TXN.TYPE.CONDITION. But, this is not in line with rule set in DATES File. DATES File rules will be applied even if FT.TXN.TYPE.CONDITION rules permit. Overrides will be generated
+
+E) Yes. Whenever this is in line with rules set in FT.TXN.TYPE.CONDITION, this will be allowed without overrides. When it is not in line with FT.TXN.TYPE.CONDITION, this will not be allowed
+
+---
+
+Question 4
+The bank wants to input an outward transfer where, charges due to this transaction are borne by the beneficiary. What are the options to be chosen?
+
+A) BEN.OUR.CHARGE to BEN and CREDIT.LESS.CHARGES
+
+B) BEN.OUR.CHARGE to SHA and DEBIT.PLUS.CHARGES
+
+C) BEN.OUR.CHARGE to OUR and DEBIT.PLUS.CHARGES
+
+D) <span style="color:red">BEN.OUR.CHARGE to BEN and DEBIT.PLUS.CHARGES</span>
+
+E) BEN.OUR.CHARGE to OUR and CREDIT.PLUS.CHARGES
+
+---
+
+Question 5
+Can charge and commission amounts be accounted separately from the transaction amounts in a Funds Transfer transaction?
+
+A) No, charge and commission amounts are always netted to the transaction amount and then accounted.
+
+B) Yes, Charge and commission accounting entries can be raised separately. CHARGE.FOR and COMMISSION.FOR fields in FT can be used for this.
+
+C) Yes, charge and commission entries can be raised separately using COMBINE.TXN field in TRANSACTION table.
+
+D) Yes, charge and commission can be raised separately using CENTRALISED.FT field in FT.APPL.DEFAULT.
+
+E) <span style="color:red">Yes, charge and commission accounting entries can be raised separately using CHG.COMM.SEPARATE field in FT.GROUP.CONDITION.</span>
+
+---
+
+Question 6
+A Bank is operating in a Country where exchange rates for some currencies are fixed by the Central Bank on a daily basis. For which currencies should it use the FIXING.DATE Field in CURRENCY table?
+
+A) For all currencies, other than local currency
+
+B) Not necessary to use this Field
+
+C) For all currencies whose exchange rates are not Fixed by Central Bank
+
+D) <span style="color:red">For all currencies whose exchange rates are Fixed by Central Bank</span>
+
+E) T24 does not have facility to indicate Central Bank Fixing
+
+---
+
+Question 7
+What are the different types of MT103 messages that can be generated from T24?
+
+A) MT103, MT103-, MT103+, MT103EXTEND
+
+B) MT103+, MT103-, MT103
+
+C) MT103, MT103+, MT103EXTEND
+
+D) MT103+, MT103-, MT103STP
+
+E) <span style="color:red">MT103, MT103+, MT103STP</span>
+
+---
+
+Question 8
+System date is 31 Jul 2009. A Standing Order is set to process on 02 Aug 2009 which is a holiday as per COMPANY table. Bank has set BATCH.HOLIDAY in COMPANY record to run 365 days a year i.e. a BATCH runs every day. The Standing Order has DATE.DISTMENT set to PRECEDING. When will this FT get processed and what would be the value date? (Assume that there is no debit or credit value gap, only 02 Aug is a holiday and STO type is FI)
+
+A) <span style="color:red">On 31 July 2009 COB (during SOD), with value date of FT being 31 July 2009</span>
+
+B) On 31 July COB 2009 (during SOD) with value date of FT being 01 Aug 2009
+
+C) On 1st of Aug 2009 COB (during SOD) with value date of FT being 02 Aug 2009
+
+D) Such set up cannot be done for FI type of STOs
+
+E) Such set up cannot be done for any type of STOs
+
+---
+
+Question 9
+Bank wants to customise the defaulting of transaction types while processing Inward MT103 messages through STP from other Banks. How this can be achieved.
+
+A) DELFT.TXN.TYPES for the Message type 103 can be added with the required transaction type for the appropriate multi value for the defaulting.
+
+B) Bank can manually change the Transaction type when the FT is placed in INAU/IHLD
+
+C) <span style="color:red">The required transaction type can be included in the version which is attached to the field IN.OFS.VERSION in DE.MESSAGE for record 103.</span>
+
+D) The required transaction type can be defaulted in routine which is attached to the field IN.OFS.RTN in DE.MESSAGE for record 103.
+
+---
+
+Question 10
+A Bank wants to set up two records AC01 and AC02 in FT.TXN.TYPE.CONDITION. The first to allow account to account transfers even if they are of different currencies and the second to allow such transfers if only both the accounts are of same currency. How can such a rule be ensured in T24?
+
+A) In FT.TXN.TYPE.CONDITION, for AC01 type of Transaction, ALLOW.EXCHANGE Field should be set as "Y" or left blank and for AC02 type of Transaction, it should be set as "N"
+
+B) This cannot be set up in FT.TXN.TYPE.CONDITION. While inputting the transfers, PAYMENT.TYPE Field in FUNDS.TRANSFER should be set as "CONV" for the first type and "NOCONV" for the second type
+
+C) This cannot be set up in FT.TXN.TYPE.CONDITION.
+
+D) <span style="color:red">In FT.TXN.TYPE.CONDITION, for AC01 type of Transaction, PAYMENT.TYPE Field should be set as "CONV" and for AC02 type of Transaction, it should be set as "NOCONV"</span>
+
+E) This cannot be set up in FT.TXN.TYPE.CONDITION. While inputting the transfers, ALLOW.EXCHANGE Field in FUNDS.TRANSFER should be set as "Y" for the first type and "N" for the second type
+
+---
+
+Question 11
+A user tries to post the clearing string with CSMBULK=RESPOST will that work without error?
+
+A) RESPOST will work with only CSM
+
+B) To use CSMBULK=RESPOST user need to set STATEMENT.SEQUENCE
+
+C) <span style="color:red">We can't use clearing request type RESPOST with CSMBULK trait action</span>
+
+D) Yes CSMBULK=RESPOST is a valid clearing application and clearing request type there will not be any error raised
+
+---
+
+Question 12
+BP type standing order is Setup for GBP 1000. Account has balance of GBP '650. FT.APPL.DEFAULT is setup with MIN.STO.AMT as '400 for GBP currency. MIN.TRANSFER.AMT in standing order is 300. What happens in this scenario?
+
+A) 350 will be credited to Account
+
+B) 400 will be credited to account
+
+C) 300 will be credited to account
+
+D) <span style="color:red">STO is not executed</span>
+
+E) 350 will be debited
+
+---
+
+Question 13
+Can delimiter between multiple requests in case of Generic Accounting Interface be configured?
+
+A) <span style="color:red">YES</span>
+
+B) NO
+
+---
+
+Question 14
+Bank wants to setup different matching conditions to match the Incoming with Outgoing NR Items for a particular inward transaction type NCHG - How this can be setup.
+
+A) Not possible to define multiple condition for matching in T24.
+
+B) Required matching condition can be specified at the Nostro Account level for a given transaction type.
+
+C) NRPARAMETER can be added with the Trans type as NCHG and required matching conditions can be provided for the required lead company code.
+
+D) <span style="color:red">NRPARAMETER can be added with the Trans type as NCHG and required matching conditions can be provided for the record id as "SYSTEM".</span>
+
+---
+
+Question 15
+Bank processed outward Outward MT103 For USD 10,000 with the BEN.OUR.CHARGES as BEN along with sending Bank charge of USD90 by inputting the COMMISSION.AMT of USD 90 with COMMISSION.FOR as SENDER. In such case how much amount will be remitted/credited to the Nostro Account.
+
+A) Nostro will be credited for USD10,090 as the charges will be collected from Ordering customer and remitted to Beneficiary.
+
+B) Nostro will be credited for USD10,000 as the charge of USD 90 to be collected from Receiving Bank by sending MT191.
+
+C) <span style="color:red">Nostro will be credited for USD9,910 as the sending bank charges will be recovered from the Beneficiary.</span>
+
+D) Nostro will be credited for USD10,000 & charge amount of USD90 will be collected separately from Debit customer.
+
+---
+
+Question 16
+What is the option to balance the contra entry based on currency, value date irrespective of sign in generic accounting interface?
+
+A) CURRENCY
+
+B) CURRENCY.NET
+
+C) CCY.VAL
+
+D) <span style="color:red">CCY.VAL.NET</span>
+
+---
+
+Question 17
+In the case of outward transfer, a Bank wants to default charges based on Correspondent bank instead of its own client ordering the transfer. Is this possible to be set up in T24?
+
+A) Yes. Charges of Correspondent bank could be set up in FT.TXN.TYPE.CONDITION in addition to that of own client
+
+B) <span style="color:red">Yes. DEF.CORR.BANK.CHGS Field in FT.APPL.DEFAULT to be set as 'YES'. CORR.BANK.CHARGES application to be set up for each Correspondent, and optionally transaction type</span>
+
+C) Yes. DEF.CORR.BANK.CHGS Field in FT.TXN.TYPE.CONDITION to be set as 'YES'. CORR.BANK.CHARGES application to be set up for each Correspondent, and optionally transaction type
+
+D) Yes. DEF.CORR.BANK.CHGS Field in FT.TXN.TYPE.CONDITION to be set as 'YES'. IN.CHG.CODE Field to be filled for Correspondent charges
+
+E) Yes. DEF.CORR.BANK.CHGS Field in FT.APPL.DEFAULT to indicate Charge code meant for Correspondents
+
+---
+
+Question 18
+A Bank wants the User to input the Value date of transactions, if the debit and credit accounts are of different currencies for its AC type of FUNDS.TRANSFER. How can this be parameterised in FT.TXN.TYPE.CONDITION?
+
+A) PAYMENT.TYPE Field should be set as "NOCONV" and PAYMENT.VALUE Field should be set as "Y"
+
+B) PAYMENT.TYPE Field should be set as "NOCONV" and PAYMENT.VALUE Field should be set as "N"
+
+C) PAYMENT.TYPE Field should be set as "CONV" and PAYMENT.VALUE Field should be set as "N" or "NO"
+
+D) <span style="color:red">PAYMENT.TYPE Field should be set as "CONV" and PAYMENT.VALUE Field should be set as "Y"</span>
+
+E) PAYMENT.TYPE Field should be set as "ALL" and PAYMENT.VALUE Field should be set as "N" or "NO"
+
+---
+
+Question 19
+A Bank desires to execute FT.BULK.CREDIT online by the user. Which application in T24 has to be used to enable this?
+
+A) <span style="color:red">SINGLE.BULK.STO</span>
+
+B) SINGLE.INWARD.BULK
+
+C) STANDING.ORDER
+
+D) STO.BULK.CREDIT
+
+E) BULK.STO
+
+---
+
+Question 20
+For AC type of FUNDS.TRANSFER transactions, a Bank does not want to apply any Float if the Debit and Credit accounts belong to the same Customer and 1 day float if they belong to different Customers. How can this be parameterised in FT.TXN.TYPE.CONDITION?
+
+A) In T24, Only one rule can be set for float, whether the accounts belong to the same Customer or not.
+
+B) In T24, Float rule can be set only if the accounts belong to different Customers
+
+C) CUSTOMER.FLOAT and SAME.CUST.FLOAT Fields are to set as "0" and "1" respectively
+
+D) <span style="color:red">CUSTOMER.FLOAT and SAME.CUST.FLOAT Fields are to set as "1" and "0" respectively</span>
+
+E) There is no concept of Customer float in FUNDS.TRANSFER in T24
+
+---
+
+Question 21
+What is the effect of EP.BALANCE in ACCOUNT record when AC.EXPECTED.RECS of FUNDS.TYPE "RECEIPT" is created for that Account?
+
+A) No effect on the EP.BALANCE field in the account record
+
+B) <span style="color:red">Increase the value of EP.BALANCE</span>
+
+C) Decrease the value of EP.BALANCE
+
+D) Multivalue the EP.BALANCE field and update the new amount
+
+---
+
+Question 22
+When there is an incoming MT102 message, T24 will generate the following provided there are no errors.
+
+A) Multiple MT103 messages depending on the setup in DE.IMT102 table
+
+B) <span style="color:red">Multiple messages depending on setup in DE.I.FT.TXN.TYPES and data in the incoming message</span>
+
+C) Single MT101 message
+
+D) Either 1 or 3 depending on the setup during parameterisation
+
+E) Either 2 or 3 depending on the setup during parameterisation
+
+---
+
+Question 23
+A merchant does a normal credit reservation to a customer for $1000. Assuming the customer has $9000 in his account, what would be the balance after the reservation.
+
+A) Since the reservation was done by a merchant, this transaction will be considered as merchant return and the balance will remain to be in $9000
+
+B) <span style="color:red">This reservation will be executed and the customer balance will be $10000.</span>
+
+C) Transact will reject this reservation since merchant are not allowed to do normal reservation.
+
+D) None of the above.
+
+---
+
+Question 24
+Where can the Banks define the available fund as an information to be returned in the response for RESERVE and UPDATERES request types?
+
+A) as data item ADDITIONAL_INFO
+
+B) POST.PROCESS.API
+
+C) <span style="color:red">AC.ENTRY.PARAM field ADDITIONAL_INFO</span>
+
+D) Not possible to define it
+
+---
+
+Question 25
+User in a Bank manually matched statement Credit item with a ledger debit item on day 1 for a Nostro Account for USD 1000. However on day 2, user released that the matching was incorrect and he wants to correct the mistake - how this can be achieved
+
+A) By inputting new transaction for the nostro accounts for a reversal of USD 1000 and new entry for USD 1000 so as to create Ledger item for matching
+
+B) Request the Nostro Bank to reverse and reinitiate a transaction for USD 1000 so as to create statement item for matching
+
+C) <span style="color:red">User can reverse the NR Items which is already matched using "R" function.</span>
+
+D) User can clear the matched id field value in any one of the leg of the NR Item so that the same NR ITEMs record can be matched again.
+
+---
+
+Question 26
+While effecting transfers using OT type of transaction, a Bank wants to take a commission of 0.1% of the transaction amount for transfer. Can this be set up in FT.TXN.TYPE.CONDITION?
+
+A) <span style="color:red">Yes. Pre-defined commission set up in FT.COMMISSION.TYPE can be defaulted for this type of transaction by defining in COMM.TYPES field.</span>
+
+B) Yes. COMM.TYPES field in FT.COMMISSION.TYPE can be used to input 0.1% for this purpose.
+
+C) Yes. COMM.TYPES field in FT.COMMISSION.TYPE can be used input 0.1 for this purpose.
+
+D) Only flat amount of charges can be collected by using FT.TXN.TYPE.CONDITION.
+
+E) FT.COMMISSION.TYPE record should be set with Id of OT to automatically link this commission to pre-defined record in FT.TXN.TYPE.CONDITION.
+
+---
+
+Question 27
+In MT103 and MT202, tag 72 represents sender to receiver information i.e. bank to bank info. A Bank is generating a payment message 103 along with cover cable 202 and wants the tag 72 information to be present only in tag 72 of the MT103. How can this be enabled in T24?
+
+A) Set SEND.TO.PARTY Field as CRICUST and provide required info in BK.TO.BK.OUT field
+
+B) <span style="color:red">Set SEND.TO.PARTY Field as RCVBK and provide required info in BK.TO.BK.OUT field</span>
+
+C) Set SND.TO.PARTY Field as DRICUST and provide required info in BK.TO.BK.OUT field
+
+D) Set SEND.TO.PARTY Field as COLL.REM.BK and provide required info in BK.TO.BK.OUT field
+
+E) Set SEND.TO.PARTY Field as NO and provide required info in BK.TO.BK.OUT field
+
+---
+
+Question 28
+To generate MT202 message in FT, what are the values to be set in the below two fields of FT.TXN.TYPE.CONDITION application?
+
+A) NOSTRO.XFERTYPE to 202 and BANK.PAYMENT to Null
+
+B) NOSTRO.XFERTYPE to Null and BANK.PAYMENT to Null
+
+C) NOSTRO.XFERTYPE to Null and BANK.PAYMENT to Y
+
+D) <span style="color:red">NOSTRO.XFERTYPE to 202 and BANK.PAYMENT to Y</span>
+
+---
+
+Question 29
+A Bank wants to reverse a FT record on 15th of September 2009. The record was input and processed on the 10th of September 2009. Is this possible in T24?
+
+A) No. FT records cannot be reversed after due processing
+
+B) No. FT records cannot be reversed after moving to history. This record was moved to history during COB of 10th September 2009
+
+C) Yes. If HIS.REVERSAL Field of FT.TXN.TYPE. CONDITION is set as "YES", then it is possible to reverse the FT records which are in History for that particular type of transaction
+
+D) <span style="color:red">Yes. If HIST.REVERSAL Field of FT.TXN.TYPE. CONDITION is set as "YES", then it is possible to reverse the FT records which are in History for that particular type of transaction</span>
+
+E) Yes. If EXPECTED.RECS Field of FT.TXN.TYPE. CONDITION is set as "YES", then it is possible to reverse the FT records which are in History for that particular type of transaction
+
+---
+
+Question 30
+A Bank wants to apply Customer float of 2 days for all the outward transfers. How can this be achieved in T24?
+
+A) <span style="color:red">This can be achieved by setting up float in Outward transaction type in FT.TXN.TYPE.CONDITION</span>
+
+B) Float cannot be setup for Outward Transfers
+
+C) Float applies to only incoming transfers
+
+D) This can be achieved by setting up float in FT.APPL.DEFAULT
+
+E) This can be achieved by setting up float in CURRENCY record of the transaction currency.
+
+---
+
+Question 31
+A customer purchased a mobile for $1000 which he returns back to the shop. The shop process the merchant return reservation. Assuming the customer has $5000 in his account when the return was done, what will be the new balance after merchant return reservation?
+
+A) $5000
+
+B) <span style="color:red">$6000</span>
+
+C) Tenant returns an error that this reservation is not allowed and balance remains to be $5000.
+
+D) None of the above.
+
+---
+
+Question 32
+How can you change the stage of executing a standing order whether start of day or End of day execution?
+
+A) <span style="color:red">By adding New type in STO.TYPE application</span>
+
+B) Not possible to change the execution stage
+
+C) By specifying the stage of execution at the Standing order
+
+D) By specifying the Retry start/end time in FTAPPL.DEFAULT
+
+---
+
+Question 33
+A Bank has defined the CUT.OFF.RULE for a Customer in AGENCY table as 1. A OT transaction is done in GBP after the CUT.OFF.TIME for GBP for the customer. What will be the debit value date of the OT transaction if the next four days are working days.
+
+A) 14th Feb
+
+B) 15th Feb
+
+C) 16th Feb
+
+D) System date
+
+E) <span style="color:red">CUT.OFF.RULE cannot be set in AGENCY table</span>
+
+---
+
+Question 34
+When a merchant process a return/refund to a customer, the returned amount will be immediately reflected in the customer's balance.
+
+A) YES
+
+B) <span style="color:red">NO</span>
+
+---
+
+Question 35
+A bank wants to restrict transactions where charges exceeds the outward payment amount. Which application should be used to achieve this functionality?
+
+A) FT.APPL.DEFAULT
+
+B) <span style="color:red">FT.TXN.TYPE.CONDITION</span>
+
+C) FUNDS.TRANSFER
+
+D) This functionality is not possible
+
+---
+
+Question 36
+As per MT103, instructed amount 33B has to be passed for European Union countries in few occasions. Which table is referred to decide whether 33B has to be generated or not?
+
+A) <span style="color:red">DE.EUSWFTLIST</span>
+
+B) DE.BIC
+
+C) 33B is an optional tag and is not supported in T24
+
+D) EU.PARAMETER
+
+E) COUNTRY
+
+---
+
+Instructions for creating the Word document:
+
+1. Copy all the text above
+2. Open Microsoft Word
+3. Paste the content
+4. To preserve the red text formatting, you may need to:
+   · Use "Keep Source Formatting" (Ctrl+V then press Ctrl to see paste options)
+   · Or select "Merge Formatting" and then manually apply red color to the answers marked with <span style="color:red"> tags
+
+The document includes:
+
+· Clear numbering for all 36 questions
+· Proper spacing between questions
+· Red text indicators for correct answers
+· Complete answer options for each question
+
+Would you like me to provide this in any other format?
