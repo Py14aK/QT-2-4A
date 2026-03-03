@@ -1,0 +1,212 @@
+STEP 3: Execute on Real Quantum Hardware
+# ============================================================================
+def execute_on_quantum_hardware(service, circuit, num_shots=1024):
+    """
+    Executes the quantum circuit on real IBM quantum hardware.
+
+    Args:
+        service: QiskitRuntimeService instance
+        circuit: QuantumCircuit to execute
+        num_shots: Number of times to run the circuit (more shots = more random numbers)
+
+    Returns:
+        Dictionary of measurement results (counts of each binary outcome)
+    """
+    print("\n🚀 Preparing to run on quantum hardware...")
+
+    # Select the least busy backend that is operational
+    # simulator=False ensures we use real quantum hardware
+    # operational=True filters out systems that are down for maintenance
+    backend = service.least_busy(operational=True, simulator=False)
+    print(f"📡 Selected backend: {backend.name}")
+    print(f"   Number of qubits: {backend.num_qubits}")
+    print(f"   Quantum volume: {backend.quantum_volume if hasattr(backend, 'quantum_volume') else 'N/A'}")
+
+    # Transpile the circuit for the specific backend
+    # This optimizes and adapts the circuit to the hardware's native gates
+    # optimization_level=1 balances speed and optimization
+    print("\n🔧 Transpiling circuit for target hardware...")
+    pm = generate_preset_pass_manager(backend=backend, optimization_level=1)
+    isa_circuit = pm.run(circuit)
+
+    print(f"✅ Transpilation complete!")
+    print(f"   Original circuit depth: {circuit.depth()}")
+    print(f"   Transpiled circuit depth: {isa_circuit.depth()}")
+
+    # Execute the circuit using SamplerV2 (latest Qiskit Runtime primitive)
+    # The Sampler returns measurement outcomes (bit strings)
+    print(f"\n⚛️  Submitting job to quantum computer ({num_shots} shots)...")
+    print("   ⏳ This may take a few moments as your job waits in the queue...")
+
+    sampler = Sampler(mode=backend)
+    sampler.options.default_shots = num_shots
+
+    # Submit the job
+    job = sampler.run([isa_circuit])
+    print(f"   Job ID: {job.job_id()}")
+    print("   Status: Job submitted - waiting for execution...")
+
+    # Wait for results
+    result = job.result()
+    print("✅ Quantum execution complete!")
+
+    # Extract the measurement counts from the result
+    # pub_result[0] gets the first (and only) result
+    # .data.meas accesses the measurement register
+    # .get_counts() converts to a dictionary format
+    pub_result = result[0]
+    counts = pub_result.data.meas.get_counts()
+
+    return counts, backend.name
+
+
+# ============================================================================
+# STEP 4: Convert Quantum Measurements to Random Numbers
+# ============================================================================
+def extract_random_numbers(counts):
+    """
+    Converts binary measurement outcomes to decimal random numbers.
+
+    Args:
+        counts: Dictionary of measurement outcomes from quantum hardware
+
+    Returns:
+        List of random numbers (shuffled to show true randomness)
+    """
+    print("\n🎲 Converting quantum measurements to random numbers...")
+
+    import random as classical_random
+    random_numbers = []
+
+    # Each key in counts is a binary string (e.g., "10110101")
+    # Each value is how many times that outcome was measured
+    for binary_string, count in counts.items():
+        # Convert binary string to decimal integer
+        decimal_value = int(binary_string, 2)
+
+        # Add this number 'count' times to our list
+        random_numbers.extend([decimal_value] * count)
+
+    # Shuffle the list to show the true random distribution
+    # (without shuffling, grouped outcomes might make it look non-random)
+    classical_random.shuffle(random_numbers)
+
+    print(f"✅ Generated {len(random_numbers)} random numbers!")
+
+    return random_numbers
+
+
+# ============================================================================
+# STEP 5: Display Results
+# ============================================================================
+def display_results(counts, random_numbers, backend_name, num_qubits):
+    """
+    Display the quantum random number generation results with statistics.
+    """
+    print("\n" + "="*70)
+    print("🎯 QUANTUM RANDOM NUMBER GENERATOR - RESULTS")
+    print("="*70)
+    print(f"Backend Used: {backend_name}")
+    print(f"Total Measurements: {len(random_numbers)}")
+    print(f"Number Range: 0 to {2**num_qubits - 1}")
+    print(f"Unique Values Generated: {len(set(random_numbers))}")
+    print("\n📊 Sample Random Numbers (first 20):")
+    print(random_numbers[:20])
+
+    # Calculate basic statistics
+    if random_numbers:
+        print(f"\n📈 Statistics:")
+        print(f"   Min: {min(random_numbers)}")
+        print(f"   Max: {max(random_numbers)}")
+        print(f"   Mean: {sum(random_numbers)/len(random_numbers):.2f}")
+
+    print("\n🔬 Measurement Distribution:")
+    # Show top 10 most common outcomes
+    sorted_counts = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:10]
+    for binary, count in sorted_counts:
+        decimal = int(binary, 2)
+        percentage = (count / len(random_numbers)) * 100
+        print(f"   {binary} (decimal: {decimal:3d}) → {count:4d} times ({percentage:.1f}%)")
+
+    # Visualize the distribution
+    print("\n📊 Generating histogram...")
+    fig = plot_histogram(counts, figsize=(12, 6),
+                        title=f'Quantum Random Number Distribution\n(Backend: {backend_name})')
+
+    # Save the figure
+    if fig is not None:
+        fig.savefig('qrng_results.png', dpi=150, bbox_inches='tight')
+        print("✅ Histogram saved as 'qrng_results.png'")
+        plt.show()
+    else:
+        # Alternative: Create histogram using matplotlib directly
+        plt.figure(figsize=(12, 6))
+        values = [int(k, 2) for k in counts.keys()]
+        frequencies = list(counts.values())
+        plt.bar(values, frequencies, color='#1f77b4', edgecolor='black', alpha=0.7)
+        plt.xlabel('Random Number Value', fontsize=12)
+        plt.ylabel('Frequency (Number of Occurrences)', fontsize=12)
+        plt.title(f'Quantum Random Number Distribution\n(Backend: {backend_name})', fontsize=14, fontweight='bold')
+        plt.grid(axis='y', alpha=0.3, linestyle='--')
+        plt.tight_layout()
+        plt.savefig('qrng_results.png', dpi=150, bbox_inches='tight')
+        print("✅ Histogram saved as 'qrng_results.png'")
+        plt.show()
+
+
+# ============================================================================
+# MAIN EXECUTION
+# ============================================================================
+def main():
+    """
+    Main function to run the Quantum Random Number Generator.
+    """
+    print("\n" + "="*70)
+    print("⚛️  QUANTUM RANDOM NUMBER GENERATOR")
+    print("    Using IBM Quantum Hardware (Open Plan)")
+    print("="*70 + "\n")
+
+    # Configuration
+    NUM_QUBITS = 6    # 5 qubits = random numbers from 0 to 31
+    NUM_SHOTS = 1024  # Number of measurements (more = more random numbers)
+
+    try:
+        # Step 1: Setup connection to IBM Quantum
+        service = setup_quantum_service()
+
+        # Step 2: Create the quantum circuit
+        circuit = create_qrng_circuit(num_qubits=NUM_QUBITS)
+
+        # Optional: Display the circuit diagram
+        print("\n📐 Circuit Diagram:")
+        print(circuit.draw(output='text'))
+
+        # Step 3: Execute on quantum hardware
+        counts, backend_name = execute_on_quantum_hardware(
+            service, circuit, num_shots=NUM_SHOTS
+        )
+
+        # Step 4: Convert to random numbers
+        random_numbers = extract_random_numbers(counts)
+
+        # Step 5: Display results
+        display_results(counts, random_numbers, backend_name, NUM_QUBITS)
+
+        print("\n" + "="*70)
+        print("✨ Quantum Random Number Generation Complete!")
+        print("="*70)
+
+        return random_numbers
+
+    except Exception as e:
+        print(f"\n❌ Error occurred: {str(e)}")
+        print("\nTroubleshooting tips:")
+        print("1. Check your API token is correct")
+        print("2. Ensure you have available quantum time (Open Plan: 10 min/28 days)")
+        print("3. Check IBM Quantum Platform status at https://quantum.ibm.com/")
+        raise
+
+
+if __name__ == "__main__":
+    # Run the quantum random number generator
+    random_numbers = main()
