@@ -1,0 +1,19 @@
+Prepare Qubits
+Inputs:
+
+qs: an array of 
+ qubits in the 
+ states,
+bases: a Bool array of length 
+; bases[i] indicates the basis that should be used to prepare the qubit i:
+false: use the basis 
+ / 
+ (computational),
+true: use the basis 
+ / 
+ (Hadamard).
+bits: a Bool array of length 
+; bits[i] indicates the bit to encode in the i-th qubit: false = 0, true = 1.
+Goal: Prepare the qubits in the described state.
+
+
