@@ -1,19 +1,27 @@
-Prepare Qubits
-Inputs:
+from qiskit import QuantumCircuit, Aer, execute
 
-qs: an array of 
- qubits in the 
- states,
-bases: a Bool array of length 
-; bases[i] indicates the basis that should be used to prepare the qubit i:
-false: use the basis 
- / 
- (computational),
-true: use the basis 
- / 
- (Hadamard).
-bits: a Bool array of length 
-; bits[i] indicates the bit to encode in the i-th qubit: false = 0, true = 1.
-Goal: Prepare the qubits in the described state.
+# Function to measure quantum states in given basis
 
+def measure_in_basis(qc, qubit, basis):
+    if basis == 'computational':
+        # Measurement in computational basis
+        qc.measure(qubit, qubit)
+    elif basis == 'Hadamard':
+        # Measurement in Hadamard basis
+        qc.h(qubit)
+        qc.measure(qubit, qubit)
 
+# Example of creating a quantum circuit
+qc = QuantumCircuit(1, 1)
+qc.h(0)  # Applying Hadamard gate
+
+# Measuring in computational basis
+measure_in_basis(qc, 0, 'computational')
+
+# To execute the circuit
+backend = Aer.get_backend('statevector_simulator')
+job = execute(qc, backend)
+result = job.result()
+statevector = result.get_statevector()
+# Print the statevector
+print('Statevector:', statevector)
