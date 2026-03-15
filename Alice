@@ -121,3 +121,30 @@ if __name__ == "__main__":
     print(f"\nMeasurement counts:\n{counts}")
     print("="*60)
 """
+
+# Determine where to start the Bell pair chain and add an extra CNOT when n is odd
+def check_even(n: int) -> int:
+    """Return 1 if n is even, else 2."""
+    return 1 if n % 2 == 0 else 2
+
+
+def prepare_bell_pairs(qc, add_barriers=True):
+    n = qc.num_qubits - 2  # number of qubits between target and control
+    k = int(n / 2)
+
+    if add_barriers:
+        qc.barrier()
+
+    x0 = check_even(n)
+    if n % 2 != 0:
+        qc.cx(0, 1)
+
+    # Create k Bell pairs
+    for i in range(k):
+        qc.h(x0 + 2 * i)
+        qc.cx(x0 + 2 * i, x0 + 2 * i + 1)
+    return qc
+
+
+qc = prepare_bell_pairs(qc)
+qc.draw(output="mpl", fold=-1, scale=0.5)
