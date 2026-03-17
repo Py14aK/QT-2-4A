@@ -1,10 +1,6 @@
-"""
-# ============================================================================
-# STEP: Measure Quantum States in Given Basis
-# ============================================================================
-# Original specification:
-# Prepare Qubits
-# Inputs:
+
+# мeasure Quantum States in Given Basis
+# ==========================================================================
 # qs: an array of qubits in the states,
 # bases: a Bool array of length ; bases[i] indicates the basis that should 
 #        be used to prepare the qubit i:
