@@ -1,2 +1,24 @@
  下 
 
+Minimize
+2x_0 + 7x_1 + 9x_2 + x_3 + x_4 + x_5
+
+Subject to Linear constraints
+x_1 + x_2 >= 1 'c0'
+x_1 + x_4 >= 1 'c1'
+x_1 + x_3 >= 1 'c2'
+x_2 + x_3 >= 1 'c3'
+x_0 + x_2 >= 1 'c4'
+x_0 + x_4 >= 1 'c5
+x_0 + x_5 >= 1 'c6'
+x_4 + x_5 >= 1 'c7'
+x_3 + x_5 >= 1 'c8'
+
+Binary variables
+x_0 x_1 x_2 x_3 x_4 x_5
+
+Q○QT=P^(-1)AP
+
+i/3
+j/3
+k/3
