@@ -1,291 +1,165 @@
-<!DOCTYPE html><html>
-<head>
-<meta charset="UTF-8">
-<title>Icespire Character Builder</title><style>
-
-body{
-background:#0f0f0f;
-color:#eee;
-font-family:Arial;
-margin:20px;
-}
-
-h1{color:#ffd700}
-h2{color:#00d9ff}
-
-input,select,textarea{
-background:#1a1a1a;
-color:white;
-border:1px solid #555;
-padding:4px;
-}
-
-table{
-border-collapse:collapse;
-margin-bottom:20px;
-}
-
-td,th{
-border:1px solid #555;
-padding:6px;
-}
-
-button{
-background:#222;
-color:white;
-border:1px solid #666;
-padding:6px;
-cursor:pointer;
-margin:3px;
-}
-
-.section{
-margin-top:35px;
-}
-
-</style><script>
-
-/* ability modifier */
-
-function mod(score){
-return Math.floor((score-10)/2)
-}
-
-/* update ability modifiers */
-
-function updateMods(){
-
-let stats=["str","dex","con","int","wis","cha"]
-
-stats.forEach(s=>{
-let val=parseInt(document.getElementById(s).value)
-document.getElementById(s+"mod").innerText=mod(val)
-})
-
-updateSkills()
-updateHP()
-
-}
-
-/* proficiency bonus */
-
-function profBonus(){
-
-let lvl=parseInt(document.getElementById("level").value)
-
-let pb=2
-
-if(lvl>=5) pb=3
-if(lvl>=9) pb=4
-if(lvl>=13) pb=5
-if(lvl>=17) pb=6
-
-document.getElementById("prof").innerText=pb
-
-updateSkills()
-
-}
-
-/* skill calculation */
-
-function updateSkills(){
-
-let pb=parseInt(document.getElementById("prof").innerText)
-
-let skills=[
-["acro","dex"],
-["ath","str"],
-["arc","int"],
-["ste","dex"],
-["per","wis"],
-["dec","cha"]
-]
-
-skills.forEach(s=>{
-
-let prof=document.getElementById(s[0]+"prof").checked
-
-let stat=parseInt(document.getElementById(s[1]+"mod").innerText)
-
-let total=stat
-
-if(prof) total+=pb
-
-document.getElementById(s[0]+"total").innerText=total
-
-})
-
-}
-
-/* HP */
-
-function updateHP(){
-
-let hd=parseInt(document.getElementById("hitdie").value)
-let con=parseInt(document.getElementById("conmod").innerText)
-let lvl=parseInt(document.getElementById("level").value)
-
-let hp=hd + con
-
-if(lvl>1){
-hp += (hd/2+1+con)*(lvl-1)
-}
-
-document.getElementById("hp").value=Math.floor(hp)
-
-}
-
-/* class selection */
-
-function setClass(){
-
-let c=document.getElementById("class").value
-
-let data={
-fighter:10,
-barbarian:12,
-wizard:6,
-cleric:8,
-rogue:8,
-ranger:10,
-paladin:10,
-bard:8,
-druid:8,
-monk:8,
-warlock:8,
-sorcerer:6
-}
-
-document.getElementById("hitdie").value=data[c]
-
-updateHP()
-
-}
-
-/* dice roller */
-
-function rollDice(){
-
-let d=parseInt(document.getElementById("dice").value)
-
-let r=Math.floor(Math.random()*d)+1
-
-document.getElementById("diceResult").innerText="Result: "+r
-
-}
-
-/* save character */
-
-function saveChar(){
-
-let inputs=document.querySelectorAll("input,select,textarea")
-
-let data={}
-
-inputs.forEach(i=>{
-data[i.id]=i.value
-})
-
-let blob=new Blob([JSON.stringify(data)],{type:"application/json"})
-
-let a=document.createElement("a")
-
-a.href=URL.createObjectURL(blob)
-
-a.download="character.json"
-
-a.click()
-
-}
-
-/* load character */
-
-function loadChar(e){
-
-let file=e.target.files[0]
-
-let reader=new FileReader()
-
-reader.onload=function(){
-
-let data=JSON.parse(reader.result)
-
-for(let k in data){
-
-let el=document.getElementById(k)
-
-if(el) el.value=data[k]
-
-}
-
-updateMods()
-profBonus()
-
-}
-
-reader.readAsText(file)
-
-}
-
-</script></head><body><h1>Icespire Character Builder</h1><div class="section"><h2>Basic</h2>Name <input id="name">
-
-Level <input id="level" value="1" oninput="profBonus();updateHP()">
-
-Proficiency Bonus: <span id="prof">2</span>
-
-<br><br>
-
-Race
-
-<select id="race">
-<option>Human</option>
-<option>Elf</option>
-<option>Dwarf</option>
-<option>Halfling</option>
-<option>Dragonborn</option>
-<option>Gnome</option>
-<option>Half-Elf</option>
-<option>Half-Orc</option>
-<option>Tiefling</option>
-</select>Class
-
-<select id="class" onchange="setClass()">
-<option value="fighter">Fighter</option>
-<option value="barbarian">Barbarian</option>
-<option value="wizard">Wizard</option>
-<option value="cleric">Cleric</option>
-<option value="rogue">Rogue</option>
-<option value="ranger">Ranger</option>
-<option value="paladin">Paladin</option>
-<option value="bard">Bard</option>
-<option value="druid">Druid</option>
-<option value="monk">Monk</option>
-<option value="warlock">Warlock</option>
-<option value="sorcerer">Sorcerer</option>
-</select></div><div class="section"><h2>Ability Scores</h2><table><tr><th>Stat</th><th>Score</th><th>Mod</th></tr><tr><td>STR</td><td><input id="str" value="10" oninput="updateMods()"></td><td id="strmod">0</td></tr>
-<tr><td>DEX</td><td><input id="dex" value="10" oninput="updateMods()"></td><td id="dexmod">0</td></tr>
-<tr><td>CON</td><td><input id="con" value="10" oninput="updateMods()"></td><td id="conmod">0</td></tr>
-<tr><td>INT</td><td><input id="int" value="10" oninput="updateMods()"></td><td id="intmod">0</td></tr>
-<tr><td>WIS</td><td><input id="wis" value="10" oninput="updateMods()"></td><td id="wismod">0</td></tr>
-<tr><td>CHA</td><td><input id="cha" value="10" oninput="updateMods()"></td><td id="chamod">0</td></tr></table></div><div class="section"><h2>Skills</h2><table><tr><th>Skill</th><th>Prof</th><th>Total</th></tr><tr><td>Acrobatics</td><td><input type="checkbox" id="acroprof" onchange="updateSkills()"></td><td id="acrototal"></td></tr><tr><td>Athletics</td><td><input type="checkbox" id="athprof" onchange="updateSkills()"></td><td id="athtotal"></td></tr><tr><td>Arcana</td><td><input type="checkbox" id="arcprof" onchange="updateSkills()"></td><td id="arctotal"></td></tr><tr><td>Stealth</td><td><input type="checkbox" id="steprof" onchange="updateSkills()"></td><td id="stetotal"></td></tr><tr><td>Perception</td><td><input type="checkbox" id="perprof" onchange="updateSkills()"></td><td id="pertotal"></td></tr><tr><td>Deception</td><td><input type="checkbox" id="decprof" onchange="updateSkills()"></td><td id="dectotal"></td></tr></table></div><div class="section"><h2>Combat</h2>Hit Die <input id="hitdie" value="8">
-
-HP <input id="hp">
-
-AC <input id="ac">
-
-Speed <input id="speed" value="30">
-
-</div><div class="section"><h2>Spells / Features</h2><textarea id="spells" rows="6" cols="60"></textarea></div><div class="section"><h2>Inventory</h2><textarea id="inventory" rows="6" cols="60"></textarea></div><div class="section"><h2>Dice Roller</h2>Roll d<select id="dice">
-
-<option>4</option>
-<option>6</option>
-<option>8</option>
-<option>10</option>
-<option>12</option>
-<option>20</option>
-</select><button onclick="rollDice()">Roll</button>
-
-<div id="diceResult"></div></div><div class="section"><h2>Save / Load Character</h2><button onclick="saveChar()">Save Character</button>
-
-<input type="file" onchange="loadChar(event)"></div></body>
-</html>
+"""
+sudoku_generator.py
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+Generates Sudoku puzzles that REQUIRE a specific advanced tactic to solve.
+
+Supported tactics:  xy_wing | x_wing | naked_pair
+
+Usage:
+    python sudoku_generator.py                        # default: xy_wing
+    python sudoku_generator.py --tactic x_wing
+    python sudoku_generator.py --tactic naked_pair
+    python sudoku_generator.py --tactic xy_wing --seeds 1000
+"""
+
+import copy, random, argparse
+
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# STAGE 1 \u2014 Generate a random valid solution
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+def generate_solution(seed=None):
+    """Fill a 9\u00d79 grid with a valid Sudoku solution using randomised backtracking."""
+    if seed is not None:
+        random.seed(seed)
+    g = [[0] * 9 for _ in range(9)]
+
+    def possible(g, r, c, n):
+        if n in g[r]: return False
+        if n in [g[i][c] for i in range(9)]: return False
+        br, bc = (r // 3) * 3, (c // 3) * 3
+        for i in range(br, br + 3):
+            for j in range(bc, bc + 3):
+                if g[i][j] == n: return False
+        return True
+
+    def fill(g):
+        for r in range(9):
+            for c in range(9):
+                if g[r][c] == 0:
+                    nums = list(range(1, 10))
+                    random.shuffle(nums)
+                    for n in nums:
+                        if possible(g, r, c, n):
+                            g[r][c] = n
+                            if fill(g): return True
+                            g[r][c] = 0
+                    return False
+        return True
+
+    fill(g)
+    return g
+
+
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# STAGE 2 \u2014 Strip clues (minimal unique puzzle)
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+def _possible(g, r, c, n):
+    if n in g[r]: return False
+    if n in [g[i][c] for i in range(9)]: return False
+    br, bc = (r // 3) * 3, (c // 3) * 3
+    for i in range(br, br + 3):
+        for j in range(bc, bc + 3):
+            if g[i][j] == n: return False
+    return True
+
+def count_solutions(g, limit=2):
+    """Count solutions up to `limit` (stops early for speed)."""
+    count = [0]
+    def solve(g):
+        if count[0] >= limit: return
+        for r in range(9):
+            for c in range(9):
+                if g[r][c] == 0:
+                    for n in range(1, 10):
+                        if _possible(g, r, c, n):
+                            g[r][c] = n; solve(g); g[r][c] = 0
+                    return
+        count[0] += 1
+    solve([row[:] for row in g])
+    return count[0]
+
+def strip_clues(solution):
+    """Remove as many clues as possible while keeping a unique solution."""
+    g = [row[:] for row in solution]
+    cells = [(r, c) for r in range(9) for c in range(9)]
+    random.shuffle(cells)
+    for (r, c) in cells:
+        val = g[r][c]
+        g[r][c] = 0
+        if count_solutions(g) != 1:
+            g[r][c] = val
+    return g
+
+
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# STAGE 3 \u2014 Basic solver (naked + hidden singles)
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+def candidates(g):
+    """Return dict of (r,c) \u2192 set of valid candidates for blank cells."""
+    cands = {}
+    for r in range(9):
+        for c in range(9):
+            if g[r][c] == 0:
+                used = set(g[r]) | set(g[i][c] for i in range(9))
+                br, bc = (r // 3) * 3, (c // 3) * 3
+                used |= set(g[i][j] for i in range(br, br + 3) for j in range(bc, bc + 3))
+                cands[(r, c)] = set(range(1, 10)) - used
+    return cands
+
+def basic_solve(g):
+    """Apply naked singles and hidden singles until stuck. Returns solved-so-far grid."""
+    g2 = copy.deepcopy(g)
+    changed = True
+    while changed:
+        changed = False
+        cands = candidates(g2)
+
+        # Naked singles
+        for (r, c), v in cands.items():
+            if len(v) == 1:
+                g2[r][c] = list(v)[0]
+                changed = True
+        if changed: continue
+
+        # Hidden singles
+        cands = candidates(g2)
+        for n in range(1, 10):
+            for r in range(9):
+                cells = [(r, c) for c in range(9) if n in cands.get((r, c), set())]
+                if len(cells) == 1:
+                    g2[cells[0][0]][cells[0][1]] = n; changed = True; break
+            if changed: break
+            for c in range(9):
+                cells = [(r, c) for r in range(9) if n in cands.get((r, c), set())]
+                if len(cells) == 1:
+                    g2[cells[0][0]][cells[0][1]] = n; changed = True; break
+            if changed: break
+            for br in range(0, 9, 3):
+                for bc in range(0, 9, 3):
+                    cells = [(r, c) for r in range(br, br + 3) for c in range(bc, bc + 3)
+                             if n in cands.get((r, c), set())]
+                    if len(cells) == 1:
+                        g2[cells[0][0]][cells[0][1]] = n; changed = True; break
+                if changed: break
+            if changed: break
+    return g2
+
+
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# STAGE 4 \u2014 Advanced tactic detectors
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+def sees(r1, c1, r2, c2):
+    """True if two cells share a row, column, or 3\u00d73 box."""
+    return r1 == r2 or c1 == c2 or (r1 // 3 == r2 // 3 and c1 // 3 == c2 // 3)
+
+def find_xy_wing(g):
+    """
+    XY-Wing:
+      Pivot P = {x, y}
+      Wing1 W1 = {x, z}  (sees P)
+      Wing2 W2 = {y, z}  (sees P, not W1)
+      Any cell seeing both W1 and W2 
