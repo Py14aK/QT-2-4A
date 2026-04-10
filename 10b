@@ -1,0 +1,33 @@
+q0: ──H──■────■────■────■────■────■────■────■────■───M──
+q1: ──────┼───┼────┼────┼────┼────┼────┼────┼────┼──M──
+q2: ──────┼───┼────┼────┼────┼────┼────┼────┼────┼──M──
+q3: ──────┼───┼────┼────┼────┼────┼────┼────┼────┼──M──
+q4: ──────┼───┼────┼────┼────┼────┼────┼────┼────┼──M──
+q5: ──────┼───┼────┼────┼────┼────┼────┼────┼────┼──M──
+q6: ──────┼───┼────┼────┼────┼────┼────┼────┼────┼──M──
+q7: ──────┼───┼────┼────┼────┼────┼────┼────┼────┼──M──
+q8: ──────┼───┼────┼────┼────┼────┼────┼────┼────┼──M──
+q9: ──────┼───┼────┼────┼────┼────┼────┼────┼────┼──M──
+
+from qiskit import QuantumCircuit, Aer, transpile, execute
+
+# Number of qubits for your GHZ circuit
+num_qubits = 10
+
+# Create a quantum circuit with num_qubits
+qc = QuantumCircuit(num_qubits, num_qubits)
+
+# Step 1: Create GHZ entanglement
+qc.h(0)  # Hadamard on the first qubit
+for i in range(1, num_qubits):
+    qc.cx(0, i)  # CNOT from qubit 0 to qubit i
+
+# Step 2: Optional barrier for clarity
+qc.barrier()
+
+# Step 3: Measure all qubits
+qc.measure(range(num_qubits), range(num_qubits))
+
+# Draw the circuit
+print(qc.draw(output='text'))
+
