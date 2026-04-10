@@ -1,4 +1,4 @@
-q0: ──H──■────■────■────■────■────■────■────■────■───M──
+9q0: ──H──■────■────■────■────■────■────■────■────■───M──
 q1: ──────┼───┼────┼────┼────┼────┼────┼────┼────┼──M──
 q2: ──────┼───┼────┼────┼────┼────┼────┼────┼────┼──M──
 q3: ──────┼───┼────┼────┼────┼────┼────┼────┼────┼──M──
@@ -31,3 +31,52 @@ qc.measure(range(num_qubits), range(num_qubits))
 # Draw the circuit
 print(qc.draw(output='text'))
 
+from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister, transpile, Aer, execute
+from qiskit.visualization import plot_circuit_layout, circuit_drawer
+import matplotlib.pyplot as plt
+
+# -------------------------------
+# Circuit Parameters
+# -------------------------------
+num_qubits = 10
+
+# Quantum & Classical registers
+qr = QuantumRegister(num_qubits, 'q')
+cr = ClassicalRegister(num_qubits, 'c')
+qc = QuantumCircuit(qr, cr)
+
+# -------------------------------
+# GHZ Entanglement Layer (Sky Blue)
+# -------------------------------
+qc.h(qr[0])  # Hadamard on q0
+for i in range(1, num_qubits):
+    qc.cx(qr[0], qr[i])
+qc.barrier()
+qc.data[-1].label = 'GHZ Layer'  # optional label
+
+# -------------------------------
+# Phase/Rotation Layer to Increase Entropy (Lime Green)
+# -------------------------------
+for i in range(num_qubits):
+    qc.u3(0.7, 1.2, 0.3, qr[i])  # general rotation
+    qc.u1(0.5, qr[i])             # phase rotation
+qc.barrier()
+
+# -------------------------------
+# Measurement Layer (Magenta)
+# -------------------------------
+qc.measure(qr, cr)
+
+# -------------------------------
+# Draw the Circuit (Color-coded)
+# -------------------------------
+# Use matplotlib for color highlights
+colors = {
+    'GHZ Layer': 'skyblue',
+    'Rotation Layer': 'lime',
+    'measure': 'magenta'
+}
+
+# Optional: manually color layers
+qc_draw = qc.draw(output='mpl', fold=-1, style={'backgroundcolor': '#ffffff'})
+plt.show()
