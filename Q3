@@ -1,0 +1,65 @@
+from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister, transpile
+from qiskit_aer import AerSimulator
+import random
+
+def prepare_qubits(qc, qubits, bases, bits):
+    for i, q in enumerate(qubits):
+        if bits[i]:
+            qc.x(q)
+        if bases[i]:
+            qc.h(q)
+
+def measure_in_basis(qc, qubit, classical_bit, basis='computational'):
+    if basis == 'Hadamard':
+        qc.h(qubit)
+    qc.measure(qubit, classical_bit)
+
+def qkd_protocol(num_bits):
+    """Simulate BB84 QKD between Alice and Bob, with visual circuit."""
+    # Alice chooses random bits and bases
+    alice_bits = [random.choice([0,1]) for _ in range(num_bits)]
+    alice_bases = [random.choice([False, True]) for _ in range(num_bits)]
+
+    # Bob chooses random measurement bases
+    bob_bases = [random.choice([False, True]) for _ in range(num_bits)]
+
+    # Quantum and classical registers
+    qr = QuantumRegister(num_bits, 'q')
+    cr = ClassicalRegister(num_bits, 'c')
+    qc = QuantumCircuit(qr, cr)
+
+    # Alice prepares qubits
+    prepare_qubits(qc, list(range(num_bits)), alice_bases, alice_bits)
+    qc.barrier()
+
+    # Bob measures qubits
+    for i in range(num_bits):
+        measure_in_basis(qc, i, i, 'Hadamard' if bob_bases[i] else 'computational')
+
+    # Run the circuit
+    simulator = AerSimulator()
+    compiled_qc = transpile(qc, simulator)
+    counts = simulator.run(compiled_qc, shots=1).result().get_counts(compiled_qc)
+    measured_bits = list(counts.keys())[0][::-1]  # reverse string to match qubit order
+
+    # Shared key: bits where bases match
+    shared_key = [alice_bits[i] for i in range(num_bits) if alice_bases[i] == bob_bases[i]]
+    bob_key = [int(measured_bits[i]) for i in range(num_bits) if alice_bases[i] == bob_bases[i]]
+
+    return qc, alice_bits, alice_bases, bob_bases, measured_bits, shared_key, bob_key
+
+if __name__ == "__main__":
+    num_bits = 10
+    qc, alice_bits, alice_bases, bob_bases, measured_bits, shared_key, bob_key = qkd_protocol(num_bits)
+
+    # Print circuit diagram
+    print("Quantum circuit (Alice prepares, Bob measures):")
+    print(qc.draw(output='text'))
+
+    # Print results
+    print("\nAlice bits:        ", alice_bits)
+    print("Alice bases:       ", ['H' if b else 'Z' for b in alice_bases])
+    print("Bob bases:         ", ['H' if b else 'Z' for b in bob_bases])
+    print("Bob measured bits: ", [int(b) for b in measured_bits])
+    print("Shared key (Alice):", shared_key)
+    print("Shared key (Bob):  ", bob_key)
