@@ -1,1 +1,33 @@
-001
+
+
+g = [[0] * 9 for _ in range(9)]
+
+    def _poss_cand(g, r, c, n):
+        if n in g[r]: return False
+        if n in [g[i][c] for i in range(9)]: return False
+        br, bc = (r // 3) * 3, (c // 3) * 3
+        for i in range(br, br + 3):
+            for j in range(bc, bc + 3):
+                if g[i][j] == n: return False
+        return True
+
+all_units():
+    """Yield all 27 units as lists of (r,c)."""
+    for r in range(9):
+        yield [(r, c) for c in range(9)]
+    for c in range(9):
+        yield [(r, c) for r in range(9)]
+    for br in range(0, 9, 3):
+        for bc in range(0, 9, 3):
+            yield [(r, c) for r in range(br, br + 3) for c in range(bc, bc + 3)]
+
+def candidates(g):
+    cands = {}
+    for r in range(9):
+        for c in range(9):
+            if g[r][c] == 0:
+                used = set(g[r]) | set(g[i][c] for i in range(9))
+                br, bc = (r // 3) * 3, (c // 3) * 3
+                used |= set(g[i][j] for i in range(br, br + 3) for j in range(bc, bc + 3))
+                cands[(r, c)] = set(range(1, 10)) - used
+    return cands
