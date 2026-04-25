@@ -14,3 +14,675 @@
 към теб
 
 Itto-Te
+
+
+"""
+sudoku_generator.py
+───────────────────
+Generates Sudoku puzzles that REQUIRE a specific advanced tactic to solve.
+
+Tactics (roughly easiest → hardest):
+  naked_pair   · naked_triple   · hidden_pair   · hidden_triple
+  x_wing       · swordfish      · jellyfish
+  skyscraper   · xy_wing        · xyz_wing       · w_wing
+  simple_coloring
+
+Usage:
+    python sudoku_generator.py                             # default: xy_wing
+    python sudoku_generator.py --tactic swordfish
+    python sudoku_generator.py --tactic xyz_wing --seeds 1000
+    python sudoku_generator.py --list                      # show all tactics
+"""
+
+import copy, random, argparse, itertools
+
+# ─────────────────────────────────────────────
+# STAGE 1 — Generate a random valid solution
+# ─────────────────────────────────────────────
+
+def generate_solution():
+    g = [[0] * 9 for _ in range(9)]
+
+    def possible(g, r, c, n):
+        if n in g[r]: return False
+        if n in [g[i][c] for i in range(9)]: return False
+        br, bc = (r // 3) * 3, (c // 3) * 3
+        for i in range(br, br + 3):
+            for j in range(bc, bc + 3):
+                if g[i][j] == n: return False
+        return True
+
+    def fill(g):
+        for r in range(9):
+            for c in range(9):
+                if g[r][c] == 0:
+                    nums = list(range(1, 10))
+                    random.shuffle(nums)
+                    for n in nums:
+                        if possible(g, r, c, n):
+                            g[r][c] = n
+                            if fill(g): return True
+                            g[r][c] = 0
+                    return False
+        return True
+
+    fill(g)
+    return g
+
+
+# ─────────────────────────────────────────────
+# STAGE 2 — Strip clues (minimal unique puzzle)
+# ─────────────────────────────────────────────
+
+def _possible(g, r, c, n):
+    if n in g[r]: return False
+    if n in [g[i][c] for i in range(9)]: return False
+    br, bc = (r // 3) * 3, (c // 3) * 3
+    for i in range(br, br + 3):
+        for j in range(bc, bc + 3):
+            if g[i][j] == n: return False
+    return True
+
+def count_solutions(g, limit=2):
+    count = [0]
+    def solve(g):
+        if count[0] >= limit: return
+        for r in range(9):
+            for c in range(9):
+                if g[r][c] == 0:
+                    for n in range(1, 10):
+                        if _possible(g, r, c, n):
+                            g[r][c] = n; solve(g); g[r][c] = 0
+                    return
+        count[0] += 1
+    solve([row[:] for row in g])
+    return count[0]
+
+def strip_clues(solution):
+    g = [row[:] for row in solution]
+    cells = [(r, c) for r in range(9) for c in range(9)]
+    random.shuffle(cells)
+    for (r, c) in cells:
+        val = g[r][c]; g[r][c] = 0
+        if count_solutions(g) != 1: g[r][c] = val
+    return g
+
+
+# ─────────────────────────────────────────────
+# STAGE 3 — Basic solver (naked + hidden singles)
+# ─────────────────────────────────────────────
+
+def candidates(g):
+    cands = {}
+    for r in range(9):
+        for c in range(9):
+            if g[r][c] == 0:
+                used = set(g[r]) | set(g[i][c] for i in range(9))
+                br, bc = (r // 3) * 3, (c // 3) * 3
+                used |= set(g[i][j] for i in range(br, br + 3) for j in range(bc, bc + 3))
+                cands[(r, c)] = set(range(1, 10)) - used
+    return cands
+
+def basic_solve(g):
+    g2 = copy.deepcopy(g)
+    changed = True
+    while changed:
+        changed = False
+        cands = candidates(g2)
+        for (r, c), v in cands.items():
+            if len(v) == 1:
+                g2[r][c] = list(v)[0]; changed = True
+        if changed: continue
+        cands = candidates(g2)
+        for n in range(1, 10):
+            for r in range(9):
+                cells = [(r, c) for c in range(9) if n in cands.get((r, c), set())]
+                if len(cells) == 1:
+                    g2[cells[0][0]][cells[0][1]] = n; changed = True; break
+            if changed: break
+            for c in range(9):
+                cells = [(r, c) for r in range(9) if n in cands.get((r, c), set())]
+                if len(cells) == 1:
+                    g2[cells[0][0]][cells[0][1]] = n; changed = True; break
+            if changed: break
+            for br in range(0, 9, 3):
+                for bc in range(0, 9, 3):
+                    cells = [(r, c) for r in range(br, br + 3) for c in range(bc, bc + 3)
+                             if n in cands.get((r, c), set())]
+                    if len(cells) == 1:
+                        g2[cells[0][0]][cells[0][1]] = n; changed = True; break
+                if changed: break
+            if changed: break
+    return g2
+
+
+# ─────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────
+
+def sees(r1, c1, r2, c2):
+    return r1 == r2 or c1 == c2 or (r1 // 3 == r2 // 3 and c1 // 3 == c2 // 3)
+
+def all_units():
+    """Yield all 27 units as lists of (r,c)."""
+    for r in range(9):
+        yield [(r, c) for c in range(9)]
+    for c in range(9):
+        yield [(r, c) for r in range(9)]
+    for br in range(0, 9, 3):
+        for bc in range(0, 9, 3):
+            yield [(r, c) for r in range(br, br + 3) for c in range(bc, bc + 3)]
+
+
+# ─────────────────────────────────────────────
+# STAGE 4 — Tactic detectors
+# ─────────────────────────────────────────────
+
+# ── NAKED PAIR ────────────────────────────────
+def find_naked_pair(g):
+    """Two cells in a unit share exactly the same 2 candidates."""
+    cands = candidates(g)
+    for unit in all_units():
+        pairs = [(rc, cands[rc]) for rc in unit if rc in cands and len(cands[rc]) == 2]
+        for (rc1, v1), (rc2, v2) in itertools.combinations(pairs, 2):
+            if v1 == v2:
+                # check there are victims to eliminate from
+                victims = [rc for rc in unit
+                           if rc not in (rc1, rc2) and rc in cands and cands[rc] & v1]
+                if victims:
+                    return {"pair": v1, "cells": (rc1, rc2), "victims": victims}
+    return None
+
+
+# ── NAKED TRIPLE ──────────────────────────────
+def find_naked_triple(g):
+    """Three cells in a unit whose candidates together cover exactly 3 digits."""
+    cands = candidates(g)
+    for unit in all_units():
+        small = [rc for rc in unit if rc in cands and len(cands[rc]) in (2, 3)]
+        for trio in itertools.combinations(small, 3):
+            combined = cands[trio[0]] | cands[trio[1]] | cands[trio[2]]
+            if len(combined) == 3:
+                victims = [rc for rc in unit
+                           if rc not in trio and rc in cands and cands[rc] & combined]
+                if victims:
+                    return {"digits": combined, "cells": trio, "victims": victims}
+    return None
+
+
+# ── HIDDEN PAIR ───────────────────────────────
+def find_hidden_pair(g):
+    """Two digits appear in only the same 2 cells within a unit."""
+    cands = candidates(g)
+    for unit in all_units():
+        blank = [rc for rc in unit if rc in cands]
+        for n1, n2 in itertools.combinations(range(1, 10), 2):
+            cells_n1 = [rc for rc in blank if n1 in cands[rc]]
+            cells_n2 = [rc for rc in blank if n2 in cands[rc]]
+            if len(cells_n1) == 2 and cells_n1 == cells_n2:
+                pair_digits = {n1, n2}
+                # victims: extra candidates in those 2 cells
+                victims = [rc for rc in cells_n1 if cands[rc] - pair_digits]
+                if victims:
+                    return {"digits": pair_digits, "cells": tuple(cells_n1)}
+    return None
+
+
+# ── HIDDEN TRIPLE ─────────────────────────────
+def find_hidden_triple(g):
+    """Three digits appear only within the same 3 cells in a unit."""
+    cands = candidates(g)
+    for unit in all_units():
+        blank = [rc for rc in unit if rc in cands]
+        for n1, n2, n3 in itertools.combinations(range(1, 10), 3):
+            triple = {n1, n2, n3}
+            cells = [rc for rc in blank if cands[rc] & triple]
+            if len(cells) == 3:
+                combined = cands[cells[0]] | cands[cells[1]] | cands[cells[2]]
+                if combined == triple:
+                    victims = [rc for rc in cells if cands[rc] - triple]
+                    if victims:
+                        return {"digits": triple, "cells": tuple(cells)}
+    return None
+
+
+# ── X-WING ────────────────────────────────────
+def find_x_wing(g):
+    """Digit confined to exactly 2 cells in 2 rows sharing the same 2 columns (or vice-versa)."""
+    cands = candidates(g)
+    for n in range(1, 10):
+        # row-based
+        rows = {}
+        for r in range(9):
+            cols = tuple(c for c in range(9) if n in cands.get((r, c), set()))
+            if len(cols) == 2: rows[r] = cols
+        for r1, r2 in itertools.combinations(rows, 2):
+            if rows[r1] == rows[r2]:
+                cols = rows[r1]
+                victims = [(r, c) for r in range(9) for c in cols
+                           if r not in (r1, r2) and n in cands.get((r, c), set())]
+                if victims:
+                    return {"digit": n, "type": "row", "rows": (r1, r2),
+                            "cols": cols, "victims": victims}
+        # col-based
+        cols = {}
+        for c in range(9):
+            rs = tuple(r for r in range(9) if n in cands.get((r, c), set()))
+            if len(rs) == 2: cols[c] = rs
+        for c1, c2 in itertools.combinations(cols, 2):
+            if cols[c1] == cols[c2]:
+                rows2 = cols[c1]
+                victims = [(r, c) for c in range(9) for r in rows2
+                           if c not in (c1, c2) and n in cands.get((r, c), set())]
+                if victims:
+                    return {"digit": n, "type": "col", "cols": (c1, c2),
+                            "rows": rows2, "victims": victims}
+    return None
+
+
+# ── SWORDFISH ─────────────────────────────────
+def find_swordfish(g):
+    """3-row/col generalisation of X-Wing."""
+    cands = candidates(g)
+    for n in range(1, 10):
+        # row-based
+        rows = {}
+        for r in range(9):
+            cols = frozenset(c for c in range(9) if n in cands.get((r, c), set()))
+            if 2 <= len(cols) <= 3: rows[r] = cols
+        for r1, r2, r3 in itertools.combinations(rows, 3):
+            combined_cols = rows[r1] | rows[r2] | rows[r3]
+            if len(combined_cols) == 3:
+                victims = [(r, c) for r in range(9) for c in combined_cols
+                           if r not in (r1, r2, r3) and n in cands.get((r, c), set())]
+                if victims:
+                    return {"digit": n, "type": "row",
+                            "rows": (r1, r2, r3), "cols": combined_cols, "victims": victims}
+        # col-based
+        cols = {}
+        for c in range(9):
+            rs = frozenset(r for r in range(9) if n in cands.get((r, c), set()))
+            if 2 <= len(rs) <= 3: cols[c] = rs
+        for c1, c2, c3 in itertools.combinations(cols, 3):
+            combined_rows = cols[c1] | cols[c2] | cols[c3]
+            if len(combined_rows) == 3:
+                victims = [(r, c) for c in range(9) for r in combined_rows
+                           if c not in (c1, c2, c3) and n in cands.get((r, c), set())]
+                if victims:
+                    return {"digit": n, "type": "col",
+                            "cols": (c1, c2, c3), "rows": combined_rows, "victims": victims}
+    return None
+
+
+# ── JELLYFISH ─────────────────────────────────
+def find_jellyfish(g):
+    """4-row/col generalisation of X-Wing / Swordfish."""
+    cands = candidates(g)
+    for n in range(1, 10):
+        rows = {}
+        for r in range(9):
+            cols = frozenset(c for c in range(9) if n in cands.get((r, c), set()))
+            if 2 <= len(cols) <= 4: rows[r] = cols
+        for combo in itertools.combinations(rows, 4):
+            combined = rows[combo[0]] | rows[combo[1]] | rows[combo[2]] | rows[combo[3]]
+            if len(combined) == 4:
+                victims = [(r, c) for r in range(9) for c in combined
+                           if r not in combo and n in cands.get((r, c), set())]
+                if victims:
+                    return {"digit": n, "type": "row", "rows": combo,
+                            "cols": combined, "victims": victims}
+        cols = {}
+        for c in range(9):
+            rs = frozenset(r for r in range(9) if n in cands.get((r, c), set()))
+            if 2 <= len(rs) <= 4: cols[c] = rs
+        for combo in itertools.combinations(cols, 4):
+            combined = cols[combo[0]] | cols[combo[1]] | cols[combo[2]] | cols[combo[3]]
+            if len(combined) == 4:
+                victims = [(r, c) for c in range(9) for r in combined
+                           if c not in combo and n in cands.get((r, c), set())]
+                if victims:
+                    return {"digit": n, "type": "col", "cols": combo,
+                            "rows": combined, "victims": victims}
+    return None
+
+
+# ── SKYSCRAPER ────────────────────────────────
+def find_skyscraper(g):
+    """
+    Digit n appears in exactly 2 cells in each of 2 rows (cols).
+    The two rows share ONE column → the other two cells form a chain.
+    Any cell seeing BOTH chain ends can't be n.
+    """
+    cands = candidates(g)
+    for n in range(1, 10):
+        # row-based skyscraper
+        rows = {}
+        for r in range(9):
+            cols = [c for c in range(9) if n in cands.get((r, c), set())]
+            if len(cols) == 2: rows[r] = cols
+        for r1, r2 in itertools.combinations(rows, 2):
+            shared = set(rows[r1]) & set(rows[r2])
+            if len(shared) == 1:
+                sc = list(shared)[0]
+                tip1 = (r1, [c for c in rows[r1] if c != sc][0])
+                tip2 = (r2, [c for c in rows[r2] if c != sc][0])
+                victims = [(r, c) for (r, c) in cands
+                           if (r, c) not in (tip1, tip2)
+                           and sees(r, c, *tip1) and sees(r, c, *tip2)
+                           and n in cands[(r, c)]]
+                if victims:
+                    return {"digit": n, "type": "row", "rows": (r1, r2),
+                            "shared_col": sc, "tips": (tip1, tip2), "victims": victims}
+        # col-based skyscraper
+        cols = {}
+        for c in range(9):
+            rs = [r for r in range(9) if n in cands.get((r, c), set())]
+            if len(rs) == 2: cols[c] = rs
+        for c1, c2 in itertools.combinations(cols, 2):
+            shared = set(cols[c1]) & set(cols[c2])
+            if len(shared) == 1:
+                sr = list(shared)[0]
+                tip1 = ([r for r in cols[c1] if r != sr][0], c1)
+                tip2 = ([r for r in cols[c2] if r != sr][0], c2)
+                victims = [(r, c) for (r, c) in cands
+                           if (r, c) not in (tip1, tip2)
+                           and sees(r, c, *tip1) and sees(r, c, *tip2)
+                           and n in cands[(r, c)]]
+                if victims:
+                    return {"digit": n, "type": "col", "cols": (c1, c2),
+                            "shared_row": sr, "tips": (tip1, tip2), "victims": victims}
+    return None
+
+
+# ── XY-WING ───────────────────────────────────
+def find_xy_wing(g):
+    """
+    Pivot P={x,y}, Wing1={x,z} sees P, Wing2={y,z} sees P.
+    Cells seeing both wings can't be z.
+    """
+    cands = candidates(g)
+    pairs = {rc: v for rc, v in cands.items() if len(v) == 2}
+    for (pr, pc), pv in pairs.items():
+        x, y = sorted(pv)
+        for (w1r, w1c), w1v in pairs.items():
+            if (w1r, w1c) == (pr, pc) or not sees(pr, pc, w1r, w1c): continue
+            for (w2r, w2c), w2v in pairs.items():
+                if (w2r, w2c) in [(pr, pc), (w1r, w1c)]: continue
+                if not sees(pr, pc, w2r, w2c): continue
+                for xv, yv in [(x, y), (y, x)]:
+                    if xv in w1v and yv in w2v:
+                        z = w1v - {xv}
+                        if z == w2v - {yv} and len(z) == 1:
+                            zv = list(z)[0]
+                            victims = [(r, c) for (r, c), v in cands.items()
+                                       if (r, c) not in [(w1r, w1c), (w2r, w2c)]
+                                       and sees(r, c, w1r, w1c)
+                                       and sees(r, c, w2r, w2c)
+                                       and zv in v]
+                            if victims:
+                                return {"pivot": (pr, pc), "wing1": (w1r, w1c),
+                                        "wing2": (w2r, w2c), "eliminate": zv, "victims": victims}
+    return None
+
+
+# ── XYZ-WING ──────────────────────────────────
+def find_xyz_wing(g):
+    """
+    Pivot P={x,y,z} (3 candidates).
+    Wing1={x,z} sees P, Wing2={y,z} sees P.
+    Cells seeing P AND both wings can't be z.
+    (Extends XY-Wing: pivot also holds z, so victims must also see the pivot.)
+    """
+    cands = candidates(g)
+    triples = {rc: v for rc, v in cands.items() if len(v) == 3}
+    pairs   = {rc: v for rc, v in cands.items() if len(v) == 2}
+    for (pr, pc), pv in triples.items():
+        for zv in pv:
+            rest = pv - {zv}
+            x, y = sorted(rest)
+            for (w1r, w1c), w1v in pairs.items():
+                if not sees(pr, pc, w1r, w1c): continue
+                if w1v != {x, zv}: continue
+                for (w2r, w2c), w2v in pairs.items():
+                    if (w2r, w2c) == (w1r, w1c): continue
+                    if not sees(pr, pc, w2r, w2c): continue
+                    if w2v != {y, zv}: continue
+                    victims = [(r, c) for (r, c), v in cands.items()
+                               if (r, c) not in [(pr, pc), (w1r, w1c), (w2r, w2c)]
+                               and sees(r, c, pr, pc)
+                               and sees(r, c, w1r, w1c)
+                               and sees(r, c, w2r, w2c)
+                               and zv in v]
+                    if victims:
+                        return {"pivot": (pr, pc), "wing1": (w1r, w1c),
+                                "wing2": (w2r, w2c), "eliminate": zv, "victims": victims}
+    return None
+
+
+# ── W-WING ────────────────────────────────────
+def find_w_wing(g):
+    """
+    Two cells A, B both with candidates {p, q} (not in same unit).
+    A strong link on p exists in a unit containing one cell from each pair's column/row.
+    → B's q can be eliminated from cells seeing both A and B.
+    Simplified detection: find two {p,q} cells not seeing each other,
+    where p has a strong link (appears exactly twice) in a row/col/box
+    connecting them.
+    """
+    cands = candidates(g)
+    pairs = [(rc, v) for rc, v in cands.items() if len(v) == 2]
+    for i, ((r1, c1), v1) in enumerate(pairs):
+        for (r2, c2), v2 in pairs[i+1:]:
+            if v1 != v2: continue
+            if sees(r1, c1, r2, c2): continue  # must NOT see each other
+            p, q = sorted(v1)
+            for n in (p, q):
+                # look for a unit where n appears in exactly 2 cells,
+                # one seeing (r1,c1) and one seeing (r2,c2)
+                for unit in all_units():
+                    n_cells = [rc for rc in unit if n in cands.get(rc, set())]
+                    if len(n_cells) == 2:
+                        a, b = n_cells
+                        if ((sees(r1,c1,*a) and sees(r2,c2,*b)) or
+                            (sees(r1,c1,*b) and sees(r2,c2,*a))):
+                            elim = q if n == p else p
+                            victims = [(r, c) for (r, c), v in cands.items()
+                                       if (r, c) not in [(r1,c1),(r2,c2)]
+                                       and sees(r,c,r1,c1) and sees(r,c,r2,c2)
+                                       and elim in v]
+                            if victims:
+                                return {"cells": ((r1,c1),(r2,c2)), "link_digit": n,
+                                        "link_cells": (a, b), "eliminate": elim,
+                                        "victims": victims}
+    return None
+
+
+# ── SIMPLE COLORING (Single's Chain) ──────────────────────────────────
+def find_simple_coloring(g):
+    """
+    Build a chain of strong links (conjugate pairs) for a digit n.
+    Color alternately. Two same-color cells seeing each other → that color is wrong,
+    eliminate n from all those cells.
+    Also: a cell seeing two different-color cells can't be n.
+    """
+    cands = candidates(g)
+    for n in range(1, 10):
+        # Build conjugate-pair graph (strong links)
+        links = {}  # cell → set of strongly linked cells
+        for unit in all_units():
+            n_cells = [rc for rc in unit if n in cands.get(rc, set())]
+            if len(n_cells) == 2:
+                a, b = n_cells
+                links.setdefault(a, set()).add(b)
+                links.setdefault(b, set()).add(a)
+
+        visited = set()
+        for start in links:
+            if start in visited: continue
+            # BFS to color the component
+            color = {start: 0}
+            queue = [start]
+            visited.add(start)
+            while queue:
+                curr = queue.pop()
+                for nb in links.get(curr, []):
+                    if nb not in color:
+                        color[nb] = 1 - color[curr]
+                        visited.add(nb)
+                        queue.append(nb)
+
+            c0 = [rc for rc, col in color.items() if col == 0]
+            c1 = [rc for rc, col in color.items() if col == 1]
+
+            # Rule 1: two same-color cells see each other → that color is eliminated
+            for col_cells in (c0, c1):
+                for a, b in itertools.combinations(col_cells, 2):
+                    if sees(*a, *b):
+                        return {"digit": n, "rule": "color_conflict",
+                                "bad_color_cells": col_cells,
+                                "victims": col_cells}
+
+            # Rule 2: cell sees both colors → can't be n
+            victims = []
+            for rc, v in cands.items():
+                if rc in color or n not in v: continue
+                sees_c0 = any(sees(*rc, *x) for x in c0)
+                sees_c1 = any(sees(*rc, *x) for x in c1)
+                if sees_c0 and sees_c1:
+                    victims.append(rc)
+            if victims:
+                return {"digit": n, "rule": "sees_both_colors",
+                        "color0": c0, "color1": c1, "victims": victims}
+    return None
+
+
+# ─────────────────────────────────────────────
+# Tactic registry (ordered easy → hard)
+# ─────────────────────────────────────────────
+
+TACTIC_FINDERS = {
+    "naked_pair":       find_naked_pair,
+    "naked_triple":     find_naked_triple,
+    "hidden_pair":      find_hidden_pair,
+    "hidden_triple":    find_hidden_triple,
+    "x_wing":           find_x_wing,
+    "swordfish":        find_swordfish,
+    "jellyfish":        find_jellyfish,
+    "skyscraper":       find_skyscraper,
+    "xy_wing":          find_xy_wing,
+    "xyz_wing":         find_xyz_wing,
+    "w_wing":           find_w_wing,
+    "simple_coloring":  find_simple_coloring,
+}
+
+
+# ─────────────────────────────────────────────
+# STAGE 5 — Main generator loop
+# ─────────────────────────────────────────────
+
+def generate(target_tactic="xy_wing", max_seeds=1000, verbose=True):
+    if target_tactic not in TACTIC_FINDERS:
+        raise ValueError(f"Unknown tactic '{target_tactic}'. Choose from: {list(TACTIC_FINDERS)}")
+
+    finder = TACTIC_FINDERS[target_tactic]
+
+    for seed in range(max_seeds):
+        random.seed(seed)
+        solution = generate_solution()
+        puzzle   = strip_clues(solution)
+        after    = basic_solve(puzzle)
+        blanks   = sum(1 for r in range(9) for c in range(9) if after[r][c] == 0)
+
+        if blanks == 0: continue
+
+        result = finder(after)
+        if result:
+            if verbose:
+                clues = sum(1 for r in range(9) for c in range(9) if puzzle[r][c] != 0)
+                print(f"✓  seed={seed} | {clues} clues | {blanks} blanks after basic solve")
+                print(f"   Tactic: {target_tactic.upper()}")
+                _print_tactic(target_tactic, result)
+            return puzzle, solution, result
+
+    print(f"✗  No puzzle found within {max_seeds} seeds.")
+    return None, None, None
+
+
+# ─────────────────────────────────────────────
+# Pretty-print tactic info
+# ─────────────────────────────────────────────
+
+def _fmt(rc):
+    return f"({rc[0]+1},{rc[1]+1})"
+
+def _print_tactic(name, info):
+    def fmtset(s): return "{" + ",".join(str(x) for x in sorted(s)) + "}"
+    def fmtcells(cs): return " ".join(_fmt(c) for c in cs)
+
+    if name in ("naked_pair", "naked_triple"):
+        print(f"   Digits {fmtset(info['digits'])} in cells {fmtcells(info['cells'])}")
+        print(f"   → Eliminates from {fmtcells(info['victims'])}")
+    elif name in ("hidden_pair", "hidden_triple"):
+        print(f"   Digits {fmtset(info['digits'])} hidden in {fmtcells(info['cells'])}")
+    elif name in ("x_wing", "swordfish", "jellyfish"):
+        print(f"   Digit {info['digit']} | rows {info.get('rows')} cols {info.get('cols')}")
+        if "victims" in info:
+            print(f"   → Eliminates from {fmtcells(info['victims'])}")
+    elif name == "skyscraper":
+        print(f"   Digit {info['digit']} | tips {_fmt(info['tips'][0])} {_fmt(info['tips'][1])}")
+        print(f"   → Eliminates from {fmtcells(info['victims'])}")
+    elif name in ("xy_wing", "xyz_wing"):
+        print(f"   Pivot {_fmt(info['pivot'])} | Wing1 {_fmt(info['wing1'])} | Wing2 {_fmt(info['wing2'])}")
+        print(f"   → Eliminates {info['eliminate']} from {fmtcells(info['victims'])}")
+    elif name == "w_wing":
+        print(f"   Cells {_fmt(info['cells'][0])} {_fmt(info['cells'][1])} | link digit {info['link_digit']}")
+        print(f"   → Eliminates {info['eliminate']} from {fmtcells(info['victims'])}")
+    elif name == "simple_coloring":
+        print(f"   Digit {info['digit']} | rule: {info['rule']}")
+        print(f"   → Eliminates from {fmtcells(info['victims'])}")
+
+
+# ─────────────────────────────────────────────
+# Display
+# ─────────────────────────────────────────────
+
+def print_grid(g, label=""):
+    if label: print(f"\n{label}")
+    for i, row in enumerate(g):
+        if i in [0, 3, 6]: print("+-------+-------+-------+")
+        line = ""
+        for j, v in enumerate(row):
+            if j in [0, 3, 6]: line += "| "
+            line += (str(v) if v else ".") + " "
+        print(line + "|")
+    print("+-------+-------+-------+")
+
+
+# ─────────────────────────────────────────────
+# Entry point
+# ─────────────────────────────────────────────
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Generate Sudoku puzzles requiring specific advanced tactics.")
+    parser.add_argument("--tactic", default="xy_wing", choices=list(TACTIC_FINDERS),
+                        help="Target tactic (default: xy_wing)")
+    parser.add_argument("--seeds", type=int, default=1000,
+                        help="Max seeds to try (default: 1000)")
+    parser.add_argument("--list", action="store_true",
+                        help="List all available tactics and exit")
+    args = parser.parse_args()
+
+    if args.list:
+        print("Available tactics (easiest → hardest):")
+        for t in TACTIC_FINDERS:
+            print(f"  {t}")
+    else:
+        puzzle, solution, tactic_info = generate(
+            target_tactic=args.tactic,
+            max_seeds=args.seeds,
+            verbose=True,
+        )
+        if puzzle:
+            print_grid(puzzle,   label="PUZZLE:")
+            print_grid(solution, label="SOLUTION:")
+
