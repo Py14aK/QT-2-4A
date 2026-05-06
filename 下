@@ -1,7 +1,7 @@
  下 
 
 Minimize
-2x_0 + 7x_1 + 9x_2 + x_3 + x_4 + x_5
+2x_0 + 7x_1 + 9x_2 -( x_3 + x_4 + x_5)
 
 Subject to Linear constraints
 x_1 + x_2 >= 1 'c0'
