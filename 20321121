@@ -1,0 +1,987 @@
+
+from __future__ import annotations
+
+import csv
+import hashlib
+import itertools
+import json
+import logging
+import random
+import secrets
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+
+import numpy as np
+
+log = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+
+Grid = np.ndarray
+
+
+@dataclass
+class IBMEntropyConfig:
+    use_ibm: bool = False
+    token: str = ""
+    channel: str = "ibm_quantum"
+    backend: str = "ibm_brisbane"
+    max_width: int = 16
+    optimization_level: int = 1
+
+
+class QuantumEntropySource:
+    """
+    Entropy source for Sudoku generation.
+
+    IBM mode samples Hadamard-measurement bits from real hardware.
+    Fallback mode uses Python OS entropy through secrets.
+
+    The seed is SHA-256 compressed. This is useful entropy conditioning,
+    not a device-independent randomness certificate.
+    """
+
+    def __init__(self, cfg: Optional[IBMEntropyConfig] = None):
+        self.cfg = cfg or IBMEntropyConfig()
+
+    def seed_int(self, n_bits: int = 256) -> int:
+        bits = self.sample_bits(n_bits=n_bits)
+        digest = hashlib.sha256(bits.encode("ascii")).digest()
+        return int.from_bytes(digest, byteorder="big", signed=False)
+
+    def sample_bits(self, n_bits: int = 256) -> str:
+        if self.cfg.use_ibm:
+            return self._sample_ibm_bits(n_bits)
+        return "".join(str(secrets.randbits(1)) for _ in range(n_bits))
+
+    def _sample_ibm_bits(self, n_bits: int) -> str:
+        try:
+            from qiskit import QuantumCircuit, transpile
+            from qiskit_ibm_runtime import QiskitRuntimeService
+        except Exception as exc:
+            raise RuntimeError(
+                "IBM entropy requested, but qiskit/qiskit-ibm-runtime is unavailable."
+            ) from exc
+
+        if not self.cfg.token:
+            raise ValueError("IBM entropy requested, but token is empty.")
+
+        service = QiskitRuntimeService(channel=self.cfg.channel, token=self.cfg.token)
+        backend = service.backend(self.cfg.backend)
+
+        backend_qubits = int(getattr(backend, "num_qubits", self.cfg.max_width))
+        width_cap = max(1, min(backend_qubits, self.cfg.max_width))
+        bits: List[str] = []
+
+        while len(bits) < n_bits:
+            width = min(width_cap, n_bits - len(bits))
+            circuit = QuantumCircuit(width, width)
+            circuit.h(range(width))
+            circuit.measure(range(width), range(width))
+
+            tqc = transpile(
+                circuit,
+                backend=backend,
+                optimization_level=self.cfg.optimization_level,
+            )
+
+            job = backend.run(tqc, shots=1, memory=True)
+            result = job.result()
+
+            try:
+                memory = result.get_memory()
+                for shot in memory:
+                    bits.extend(reversed(shot.replace(" ", "")))
+            except Exception:
+                counts = result.get_counts()
+                for bitstring, count in counts.items():
+                    for _ in range(count):
+                        bits.extend(reversed(bitstring.replace(" ", "")))
+
+        return "".join(bits[:n_bits])
+
+
+class SudokuValidator:
+    def __init__(self, n: int = 3):
+        self.n = n
+        self.N = n * n
+
+    def is_valid_partial(self, grid: Grid) -> bool:
+        if grid.shape != (self.N, self.N):
+            return False
+
+        def no_duplicate(values: Iterable[int]) -> bool:
+            vals = [int(v) for v in values if int(v) != 0]
+            return len(vals) == len(set(vals)) and all(1 <= v <= self.N for v in vals)
+
+        for i in range(self.N):
+            if not no_duplicate(grid[i, :]) or not no_duplicate(grid[:, i]):
+                return False
+
+        for bi, bj in itertools.product(range(self.n), range(self.n)):
+            block = grid[
+                bi * self.n:(bi + 1) * self.n,
+                bj * self.n:(bj + 1) * self.n,
+            ].flatten()
+            if not no_duplicate(block):
+                return False
+
+        return True
+
+    def is_valid_complete(self, grid: Grid) -> bool:
+        return grid.shape == (self.N, self.N) and not np.any(grid == 0) and self.is_valid_partial(grid)
+
+    def count_solutions(self, puzzle: Grid, limit: int = 2) -> int:
+        if not self.is_valid_partial(puzzle):
+            return 0
+
+        grid = puzzle.astype(int).copy()
+        count = 0
+
+        def candidates(row: int, col: int) -> Set[int]:
+            br = (row // self.n) * self.n
+            bc = (col // self.n) * self.n
+            used = (
+                set(int(x) for x in grid[row, :] if int(x) != 0)
+                | set(int(x) for x in grid[:, col] if int(x) != 0)
+                | set(int(x) for x in grid[br:br + self.n, bc:bc + self.n].flatten() if int(x) != 0)
+            )
+            return set(range(1, self.N + 1)) - used
+
+        def select_mrv_cell() -> Optional[Tuple[int, int, List[int]]]:
+            best: Optional[Tuple[int, int]] = None
+            best_cands: Optional[List[int]] = None
+
+            for i, j in itertools.product(range(self.N), range(self.N)):
+                if grid[i, j] != 0:
+                    continue
+                cands = sorted(candidates(i, j))
+                if not cands:
+                    return (i, j, [])
+                if best is None or len(cands) < len(best_cands or []):
+                    best = (i, j)
+                    best_cands = cands
+                    if len(cands) == 1:
+                        return (i, j, cands)
+
+            if best is None:
+                return None
+            return best[0], best[1], best_cands or []
+
+        def backtrack() -> None:
+            nonlocal count
+            if count >= limit:
+                return
+
+            choice = select_mrv_cell()
+            if choice is None:
+                count += 1
+                return
+
+            row, col, cands = choice
+            if not cands:
+                return
+
+            for value in cands:
+                grid[row, col] = value
+                backtrack()
+                grid[row, col] = 0
+                if count >= limit:
+                    return
+
+        backtrack()
+        return count
+
+    def has_unique_solution(self, puzzle: Grid) -> bool:
+        return self.count_solutions(puzzle, limit=2) == 1
+
+
+class SudokuSymmetry:
+    def __init__(self, n: int = 3):
+        self.n = n
+        self.N = n * n
+
+    def relabel(self, grid: Grid, perm: Sequence[int]) -> Grid:
+        if sorted(perm) != list(range(1, self.N + 1)):
+            raise ValueError(f"Digit permutation must contain 1..{self.N}.")
+        mapping = {v: int(perm[v - 1]) for v in range(1, self.N + 1)}
+        mapping[0] = 0
+        return np.vectorize(mapping.get)(grid).astype(int)
+
+    def permute_rows_in_band(self, grid: Grid, band: int, perm: Sequence[int]) -> Grid:
+        self._validate_small_perm(perm)
+        out = grid.copy()
+        base = band * self.n
+        for new_pos, old_pos in enumerate(perm):
+            out[base + new_pos, :] = grid[base + old_pos, :]
+        return out
+
+    def permute_cols_in_stack(self, grid: Grid, stack: int, perm: Sequence[int]) -> Grid:
+        self._validate_small_perm(perm)
+        out = grid.copy()
+        base = stack * self.n
+        for new_pos, old_pos in enumerate(perm):
+            out[:, base + new_pos] = grid[:, base + old_pos]
+        return out
+
+    def permute_bands(self, grid: Grid, band_order: Sequence[int]) -> Grid:
+        self._validate_small_perm(band_order)
+        out = grid.copy()
+        for new_band, old_band in enumerate(band_order):
+            out[new_band * self.n:(new_band + 1) * self.n, :] = grid[
+                old_band * self.n:(old_band + 1) * self.n, :
+            ]
+        return out
+
+    def permute_stacks(self, grid: Grid, stack_order: Sequence[int]) -> Grid:
+        self._validate_small_perm(stack_order)
+        out = grid.copy()
+        for new_stack, old_stack in enumerate(stack_order):
+            out[:, new_stack * self.n:(new_stack + 1) * self.n] = grid[
+                :, old_stack * self.n:(old_stack + 1) * self.n
+            ]
+        return out
+
+    def rotate90(self, grid: Grid) -> Grid:
+        return np.rot90(grid, k=1).copy()
+
+    def rotate180(self, grid: Grid) -> Grid:
+        return np.rot90(grid, k=2).copy()
+
+    def rotate270(self, grid: Grid) -> Grid:
+        return np.rot90(grid, k=3).copy()
+
+    def flip_horizontal(self, grid: Grid) -> Grid:
+        return np.fliplr(grid).copy()
+
+    def flip_vertical(self, grid: Grid) -> Grid:
+        return np.flipud(grid).copy()
+
+    def flip_diagonal(self, grid: Grid) -> Grid:
+        return grid.T.copy()
+
+    def flip_antidiagonal(self, grid: Grid) -> Grid:
+        return np.rot90(grid, k=2).T.copy()
+
+    def apply_d4(self, grid: Grid, name: str) -> Grid:
+        transforms = {
+            "identity": lambda g: g.copy(),
+            "rotate90": self.rotate90,
+            "rotate180": self.rotate180,
+            "rotate270": self.rotate270,
+            "flip_horizontal": self.flip_horizontal,
+            "flip_vertical": self.flip_vertical,
+            "flip_diagonal": self.flip_diagonal,
+            "flip_antidiagonal": self.flip_antidiagonal,
+        }
+        if name not in transforms:
+            raise ValueError(f"Unknown D4 transform: {name}")
+        return transforms[name](grid)
+
+    def _validate_small_perm(self, perm: Sequence[int]) -> None:
+        if sorted(perm) != list(range(self.n)):
+            raise ValueError(f"Expected permutation of 0..{self.n - 1}, got {perm}.")
+
+
+@dataclass
+class SolutionBuildTrace:
+    entropy_seed: int
+    digit_permutation: List[int]
+    row_permutations_inside_bands: Dict[int, List[int]]
+    column_permutations_inside_stacks: Dict[int, List[int]]
+    band_order: List[int]
+    stack_order: List[int]
+    rotation_reflection: str
+    symmetry_class: str
+
+
+class QuantumEntropySudokuSolutionBuilder:
+    """
+    Complete solution builder.
+
+    Construction:
+        base Latin/Sudoku pattern
+        + quantum entropy
+        + digit relabeling
+        + band/stack permutations
+        + row/column permutations inside bands/stacks
+        + D4 rotations/reflections
+    """
+
+    def __init__(
+        self,
+        n: int = 3,
+        entropy: Optional[QuantumEntropySource] = None,
+        seed: int = 42,
+    ):
+        self.n = n
+        self.N = n * n
+        self.entropy = entropy or QuantumEntropySource()
+        self.rng = random.Random(seed)
+        self.symmetry = SudokuSymmetry(n=n)
+        self.validator = SudokuValidator(n=n)
+
+    def canonical_solution(self) -> Grid:
+        n, N = self.n, self.N
+
+        def pattern(row: int, col: int) -> int:
+            return (n * (row % n) + row // n + col) % N
+
+        return np.array(
+            [[pattern(row, col) + 1 for col in range(N)] for row in range(N)],
+            dtype=int,
+        )
+
+    def build_solution(self, use_entropy: bool = True) -> Tuple[Grid, SolutionBuildTrace]:
+        if use_entropy:
+            entropy_seed = self.entropy.seed_int(256)
+        else:
+            entropy_seed = secrets.randbits(256)
+
+        self.rng.seed(entropy_seed)
+        np.random.seed(entropy_seed % (2**32))
+
+        grid = self.canonical_solution()
+
+        digit_perm = list(range(1, self.N + 1))
+        self.rng.shuffle(digit_perm)
+        grid = self.symmetry.relabel(grid, digit_perm)
+
+        row_perms: Dict[int, List[int]] = {}
+        for band in range(self.n):
+            perm = list(range(self.n))
+            self.rng.shuffle(perm)
+            row_perms[band] = perm.copy()
+            grid = self.symmetry.permute_rows_in_band(grid, band, perm)
+
+        col_perms: Dict[int, List[int]] = {}
+        for stack in range(self.n):
+            perm = list(range(self.n))
+            self.rng.shuffle(perm)
+            col_perms[stack] = perm.copy()
+            grid = self.symmetry.permute_cols_in_stack(grid, stack, perm)
+
+        band_order = list(range(self.n))
+        self.rng.shuffle(band_order)
+        grid = self.symmetry.permute_bands(grid, band_order)
+
+        stack_order = list(range(self.n))
+        self.rng.shuffle(stack_order)
+        grid = self.symmetry.permute_stacks(grid, stack_order)
+
+        d4_options = [
+            "identity",
+            "rotate90",
+            "rotate180",
+            "rotate270",
+            "flip_horizontal",
+            "flip_vertical",
+            "flip_diagonal",
+            "flip_antidiagonal",
+        ]
+        rotation_reflection = self.rng.choice(d4_options)
+        grid = self.symmetry.apply_d4(grid, rotation_reflection)
+
+        if not self.validator.is_valid_complete(grid):
+            raise RuntimeError("Generated grid is not a valid complete Sudoku.")
+
+        trace = SolutionBuildTrace(
+            entropy_seed=entropy_seed,
+            digit_permutation=digit_perm,
+            row_permutations_inside_bands=row_perms,
+            column_permutations_inside_stacks=col_perms,
+            band_order=band_order,
+            stack_order=stack_order,
+            rotation_reflection=rotation_reflection,
+            symmetry_class="digit_row_column_band_stack_D4",
+        )
+        return grid, trace
+
+
+@dataclass
+class TacticTrace:
+    naked_single: int = 0
+    hidden_single: int = 0
+    naked_pair: int = 0
+    hidden_pair: int = 0
+    pointing_pair: int = 0
+    box_line_reduction: int = 0
+    brute_force: int = 0
+
+    @property
+    def difficulty(self) -> str:
+        if self.brute_force > 0:
+            return "Extreme"
+        if self.naked_pair or self.hidden_pair or self.pointing_pair or self.box_line_reduction:
+            return "Medium"
+        if self.hidden_single:
+            return "Easy"
+        return "Beginner"
+
+    @property
+    def score(self) -> int:
+        return (
+            self.naked_single
+            + 5 * self.hidden_single
+            + 20 * self.naked_pair
+            + 25 * self.hidden_pair
+            + 30 * self.pointing_pair
+            + 35 * self.box_line_reduction
+            + 200 * self.brute_force
+        )
+
+
+class HumanTacticGrader:
+    """
+    Lightweight human tactic grader.
+
+    This is intentionally conservative. It grades generated puzzles by the
+    hardest tactic needed before falling back to brute force.
+    """
+
+    def __init__(self, n: int = 3):
+        self.n = n
+        self.N = n * n
+        self.validator = SudokuValidator(n=n)
+
+    def grade(self, puzzle: Grid) -> Tuple[Grid, TacticTrace]:
+        grid = puzzle.astype(int).copy()
+        trace = TacticTrace()
+        cands = self._init_candidates(grid)
+
+        changed = True
+        while np.any(grid == 0) and changed:
+            changed = False
+            changed |= self._naked_singles(grid, cands, trace)
+            if not changed:
+                changed |= self._hidden_singles(grid, cands, trace)
+            if not changed:
+                changed |= self._naked_pairs(grid, cands, trace)
+            if not changed:
+                changed |= self._hidden_pairs(grid, cands, trace)
+            if not changed:
+                changed |= self._pointing_pairs(grid, cands, trace)
+            if not changed:
+                changed |= self._box_line_reduction(grid, cands, trace)
+
+        if np.any(grid == 0):
+            trace.brute_force += 1
+            self._backtrack(grid)
+
+        return grid, trace
+
+    def _init_candidates(self, grid: Grid) -> Dict[Tuple[int, int], Set[int]]:
+        cands = {}
+        for row, col in itertools.product(range(self.N), range(self.N)):
+            if grid[row, col] == 0:
+                cands[(row, col)] = self._candidate_set(grid, row, col)
+        return cands
+
+    def _candidate_set(self, grid: Grid, row: int, col: int) -> Set[int]:
+        if grid[row, col] != 0:
+            return set()
+        br = (row // self.n) * self.n
+        bc = (col // self.n) * self.n
+        used = (
+            set(int(x) for x in grid[row, :] if int(x) != 0)
+            | set(int(x) for x in grid[:, col] if int(x) != 0)
+            | set(int(x) for x in grid[br:br + self.n, bc:bc + self.n].flatten() if int(x) != 0)
+        )
+        return set(range(1, self.N + 1)) - used
+
+    def _assign(self, grid: Grid, cands: Dict[Tuple[int, int], Set[int]], row: int, col: int, value: int) -> None:
+        grid[row, col] = value
+        cands.pop((row, col), None)
+        br = (row // self.n) * self.n
+        bc = (col // self.n) * self.n
+
+        peers = (
+            [(row, c) for c in range(self.N)]
+            + [(r, col) for r in range(self.N)]
+            + [(br + dr, bc + dc) for dr in range(self.n) for dc in range(self.n)]
+        )
+        for peer in peers:
+            if peer in cands:
+                cands[peer].discard(value)
+
+    def _units(self) -> List[List[Tuple[int, int]]]:
+        return (
+            [[(i, j) for j in range(self.N)] for i in range(self.N)]
+            + [[(i, j) for i in range(self.N)] for j in range(self.N)]
+            + [
+                [(bi * self.n + di, bj * self.n + dj) for di in range(self.n) for dj in range(self.n)]
+                for bi in range(self.n)
+                for bj in range(self.n)
+            ]
+        )
+
+    def _naked_singles(self, grid: Grid, cands: Dict[Tuple[int, int], Set[int]], trace: TacticTrace) -> bool:
+        found = False
+        for (row, col), values in list(cands.items()):
+            if len(values) == 1:
+                self._assign(grid, cands, row, col, next(iter(values)))
+                trace.naked_single += 1
+                found = True
+        return found
+
+    def _hidden_singles(self, grid: Grid, cands: Dict[Tuple[int, int], Set[int]], trace: TacticTrace) -> bool:
+        found = False
+        for unit in self._units():
+            for value in range(1, self.N + 1):
+                places = [cell for cell in unit if value in cands.get(cell, set())]
+                if len(places) == 1:
+                    row, col = places[0]
+                    if (row, col) in cands:
+                        self._assign(grid, cands, row, col, value)
+                        trace.hidden_single += 1
+                        found = True
+        return found
+
+    def _naked_pairs(self, grid: Grid, cands: Dict[Tuple[int, int], Set[int]], trace: TacticTrace) -> bool:
+        found = False
+        for unit in self._units():
+            pairs = [cell for cell in unit if len(cands.get(cell, set())) == 2]
+            for a, b in itertools.combinations(pairs, 2):
+                if cands[a] == cands[b]:
+                    shared = set(cands[a])
+                    for cell in unit:
+                        if cell in (a, b) or cell not in cands:
+                            continue
+                        before = len(cands[cell])
+                        cands[cell] -= shared
+                        if len(cands[cell]) < before:
+                            trace.naked_pair += 1
+                            found = True
+        return found
+
+    def _hidden_pairs(self, grid: Grid, cands: Dict[Tuple[int, int], Set[int]], trace: TacticTrace) -> bool:
+        found = False
+        for unit in self._units():
+            for a, b in itertools.combinations(range(1, self.N + 1), 2):
+                places_a = [cell for cell in unit if a in cands.get(cell, set())]
+                places_b = [cell for cell in unit if b in cands.get(cell, set())]
+                if len(places_a) == 2 and set(places_a) == set(places_b):
+                    for cell in places_a:
+                        before = len(cands[cell])
+                        cands[cell] &= {a, b}
+                        if len(cands[cell]) < before:
+                            trace.hidden_pair += 1
+                            found = True
+        return found
+
+    def _pointing_pairs(self, grid: Grid, cands: Dict[Tuple[int, int], Set[int]], trace: TacticTrace) -> bool:
+        found = False
+        for bi, bj in itertools.product(range(self.n), range(self.n)):
+            box_cells = [(bi * self.n + di, bj * self.n + dj) for di in range(self.n) for dj in range(self.n)]
+            box_set = set(box_cells)
+
+            for value in range(1, self.N + 1):
+                places = [cell for cell in box_cells if value in cands.get(cell, set())]
+                if not places:
+                    continue
+
+                rows = {row for row, _ in places}
+                cols = {col for _, col in places}
+
+                if len(rows) == 1:
+                    row = next(iter(rows))
+                    for cell in [(row, c) for c in range(self.N) if (row, c) not in box_set]:
+                        if value in cands.get(cell, set()):
+                            cands[cell].discard(value)
+                            trace.pointing_pair += 1
+                            found = True
+
+                if len(cols) == 1:
+                    col = next(iter(cols))
+                    for cell in [(r, col) for r in range(self.N) if (r, col) not in box_set]:
+                        if value in cands.get(cell, set()):
+                            cands[cell].discard(value)
+                            trace.pointing_pair += 1
+                            found = True
+
+        return found
+
+    def _box_line_reduction(self, grid: Grid, cands: Dict[Tuple[int, int], Set[int]], trace: TacticTrace) -> bool:
+        found = False
+
+        for value in range(1, self.N + 1):
+            for row in range(self.N):
+                places = [(row, col) for col in range(self.N) if value in cands.get((row, col), set())]
+                boxes = {(r // self.n, c // self.n) for r, c in places}
+                if places and len(boxes) == 1:
+                    bi, bj = next(iter(boxes))
+                    box_cells = {
+                        (bi * self.n + di, bj * self.n + dj)
+                        for di in range(self.n)
+                        for dj in range(self.n)
+                    }
+                    for cell in box_cells - set(places):
+                        if value in cands.get(cell, set()):
+                            cands[cell].discard(value)
+                            trace.box_line_reduction += 1
+                            found = True
+
+            for col in range(self.N):
+                places = [(row, col) for row in range(self.N) if value in cands.get((row, col), set())]
+                boxes = {(r // self.n, c // self.n) for r, c in places}
+                if places and len(boxes) == 1:
+                    bi, bj = next(iter(boxes))
+                    box_cells = {
+                        (bi * self.n + di, bj * self.n + dj)
+                        for di in range(self.n)
+                        for dj in range(self.n)
+                    }
+                    for cell in box_cells - set(places):
+                        if value in cands.get(cell, set()):
+                            cands[cell].discard(value)
+                            trace.box_line_reduction += 1
+                            found = True
+
+        return found
+
+    def _backtrack(self, grid: Grid) -> bool:
+        for row, col in itertools.product(range(self.N), range(self.N)):
+            if grid[row, col] == 0:
+                for value in sorted(self._candidate_set(grid, row, col)):
+                    grid[row, col] = value
+                    if self._backtrack(grid):
+                        return True
+                    grid[row, col] = 0
+                return False
+        return True
+
+
+@dataclass
+class GeneratedSudoku:
+    puzzle_id: str
+    puzzle_hash: str
+    solution_hash: str
+    n: int
+    N: int
+    difficulty_target: str
+    difficulty_observed: str
+    difficulty_score: int
+    clues_given: int
+    clue_removal_order: List[Tuple[int, int]]
+    build_trace: SolutionBuildTrace
+    tactic_trace: TacticTrace
+    puzzle: List[List[int]]
+    solution: List[List[int]]
+
+    def pretty_puzzle(self) -> str:
+        grid = np.array(self.puzzle, dtype=int)
+        n = self.n
+        N = self.N
+        lines = []
+        for row in range(N):
+            if row > 0 and row % n == 0:
+                lines.append("-" * (2 * N + n - 1))
+            parts = []
+            for col in range(N):
+                if col > 0 and col % n == 0:
+                    parts.append("|")
+                value = grid[row, col]
+                parts.append(str(value) if value else ".")
+            lines.append(" ".join(parts))
+        return "\n".join(lines)
+
+
+class QuantumEntropySudokuGenerator:
+    """
+    Main generator.
+
+    Steps:
+        1. Generate a complete solved grid.
+        2. Randomize through Sudoku-preserving symmetries.
+        3. Remove clues while preserving unique solution.
+        4. Grade puzzle using human tactics.
+        5. Hash and store unique puzzles.
+        6. Export puzzles + metadata.
+    """
+
+    def __init__(
+        self,
+        n: int = 3,
+        entropy_cfg: Optional[IBMEntropyConfig] = None,
+        seed: int = 42,
+        storage_path: str | Path = "sudoku_generated_store_20260517.json",
+    ):
+        self.n = n
+        self.N = n * n
+        self.entropy = QuantumEntropySource(entropy_cfg or IBMEntropyConfig())
+        self.builder = QuantumEntropySudokuSolutionBuilder(n=n, entropy=self.entropy, seed=seed)
+        self.validator = SudokuValidator(n=n)
+        self.grader = HumanTacticGrader(n=n)
+        self.rng = random.Random(seed)
+        self.storage_path = Path(storage_path)
+        self.seen_hashes: Set[str] = set()
+        self._load_store()
+
+    def generate(
+        self,
+        n_puzzles: int = 3,
+        difficulty_target: str = "Medium",
+        max_attempts: int = 100,
+    ) -> List[GeneratedSudoku]:
+        generated: List[GeneratedSudoku] = []
+
+        for attempt in range(max_attempts):
+            if len(generated) >= n_puzzles:
+                break
+
+            solution, build_trace = self.builder.build_solution(use_entropy=True)
+            self.rng.seed(build_trace.entropy_seed ^ 0xA5A5A5A5)
+
+            puzzle, removal_order = self._remove_clues(solution, difficulty_target)
+            solved, tactic_trace = self.grader.grade(puzzle)
+
+            if not np.array_equal(solved, solution):
+                # The grader's fallback may find a valid solution; for a unique
+                # puzzle it should be identical to the original solution.
+                if not self.validator.has_unique_solution(puzzle):
+                    continue
+
+            puzzle_hash = self.hash_grid(puzzle)
+            solution_hash = self.hash_grid(solution)
+
+            if puzzle_hash in self.seen_hashes:
+                continue
+
+            item = GeneratedSudoku(
+                puzzle_id=f"sudoku_{len(self.seen_hashes) + len(generated) + 1:06d}",
+                puzzle_hash=puzzle_hash,
+                solution_hash=solution_hash,
+                n=self.n,
+                N=self.N,
+                difficulty_target=difficulty_target,
+                difficulty_observed=tactic_trace.difficulty,
+                difficulty_score=tactic_trace.score,
+                clues_given=int(np.count_nonzero(puzzle)),
+                clue_removal_order=removal_order,
+                build_trace=build_trace,
+                tactic_trace=tactic_trace,
+                puzzle=puzzle.astype(int).tolist(),
+                solution=solution.astype(int).tolist(),
+            )
+
+            generated.append(item)
+            self.seen_hashes.add(puzzle_hash)
+
+        self._append_store(generated)
+        return generated
+
+    def _remove_clues(self, solution: Grid, difficulty_target: str) -> Tuple[Grid, List[Tuple[int, int]]]:
+        puzzle = solution.copy()
+        cells = list(itertools.product(range(self.N), range(self.N)))
+        self.rng.shuffle(cells)
+
+        removal_order: List[Tuple[int, int]] = []
+        difficulty_order = {
+            "Beginner": 0,
+            "Easy": 1,
+            "Medium": 2,
+            "Hard": 3,
+            "Extreme": 4,
+        }
+        target_rank = difficulty_order.get(difficulty_target, 2)
+
+        min_clues = self._minimum_clue_floor(difficulty_target)
+
+        for row, col in cells:
+            if int(np.count_nonzero(puzzle)) <= min_clues:
+                break
+
+            old = int(puzzle[row, col])
+            puzzle[row, col] = 0
+
+            if not self.validator.has_unique_solution(puzzle):
+                puzzle[row, col] = old
+                continue
+
+            _, trace = self.grader.grade(puzzle.copy())
+            observed_rank = difficulty_order.get(trace.difficulty, 4)
+
+            # Allow puzzles up to one grade above target. This prevents the
+            # generator from freezing on exact target matching.
+            if observed_rank > target_rank + 1:
+                puzzle[row, col] = old
+                continue
+
+            removal_order.append((row, col))
+
+        return puzzle, removal_order
+
+    def _minimum_clue_floor(self, difficulty_target: str) -> int:
+        # Conservative floors. Known 9x9 minimum is 17 clues, but this generator
+        # does not try to optimize down to the theoretical minimum.
+        if self.N == 9:
+            return {
+                "Beginner": 36,
+                "Easy": 30,
+                "Medium": 26,
+                "Hard": 23,
+                "Extreme": 20,
+            }.get(difficulty_target, 26)
+
+        if self.N == 4:
+            return {
+                "Beginner": 8,
+                "Easy": 7,
+                "Medium": 6,
+                "Hard": 5,
+                "Extreme": 4,
+            }.get(difficulty_target, 6)
+
+        return max(self.N, int(0.32 * self.N * self.N))
+
+    @staticmethod
+    def hash_grid(grid: Grid) -> str:
+        payload = ",".join(str(int(x)) for x in grid.flatten())
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _load_store(self) -> None:
+        if not self.storage_path.exists():
+            return
+        try:
+            data = json.loads(self.storage_path.read_text(encoding="utf-8"))
+            for item in data:
+                if "puzzle_hash" in item:
+                    self.seen_hashes.add(item["puzzle_hash"])
+        except Exception:
+            log.warning("Could not read existing puzzle store; starting fresh.")
+
+    def _append_store(self, items: List[GeneratedSudoku]) -> None:
+        if not items:
+            return
+
+        existing = []
+        if self.storage_path.exists():
+            try:
+                existing = json.loads(self.storage_path.read_text(encoding="utf-8"))
+            except Exception:
+                existing = []
+
+        existing.extend([self._json_ready(asdict(item)) for item in items])
+        self.storage_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+
+    def export_json(self, items: List[GeneratedSudoku], path: str | Path) -> Path:
+        path = Path(path)
+        path.write_text(
+            json.dumps([self._json_ready(asdict(item)) for item in items], indent=2),
+            encoding="utf-8",
+        )
+        return path
+
+    def export_csv(self, items: List[GeneratedSudoku], path: str | Path) -> Path:
+        path = Path(path)
+        rows = []
+        for item in items:
+            rows.append({
+                "puzzle_id": item.puzzle_id,
+                "puzzle_hash": item.puzzle_hash,
+                "solution_hash": item.solution_hash,
+                "n": item.n,
+                "N": item.N,
+                "difficulty_target": item.difficulty_target,
+                "difficulty_observed": item.difficulty_observed,
+                "difficulty_score": item.difficulty_score,
+                "clues_given": item.clues_given,
+                "symmetry_class": item.build_trace.symmetry_class,
+                "rotation_reflection": item.build_trace.rotation_reflection,
+                "digit_permutation": json.dumps(item.build_trace.digit_permutation),
+                "row_permutations_inside_bands": json.dumps(item.build_trace.row_permutations_inside_bands),
+                "column_permutations_inside_stacks": json.dumps(item.build_trace.column_permutations_inside_stacks),
+                "band_order": json.dumps(item.build_trace.band_order),
+                "stack_order": json.dumps(item.build_trace.stack_order),
+                "clue_removal_order": json.dumps(item.clue_removal_order),
+            })
+
+        with path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()) if rows else [])
+            if rows:
+                writer.writeheader()
+                writer.writerows(rows)
+
+        return path
+
+    def export_txt(self, items: List[GeneratedSudoku], path: str | Path) -> Path:
+        path = Path(path)
+        blocks = []
+        for item in items:
+            blocks.append(
+                "\n".join([
+                    f"ID: {item.puzzle_id}",
+                    f"Puzzle hash: {item.puzzle_hash}",
+                    f"Solution hash: {item.solution_hash}",
+                    f"Difficulty target: {item.difficulty_target}",
+                    f"Difficulty observed: {item.difficulty_observed}",
+                    f"Difficulty score: {item.difficulty_score}",
+                    f"Clues: {item.clues_given}/{item.N * item.N}",
+                    f"Symmetry class: {item.build_trace.symmetry_class}",
+                    f"Rotation/reflection: {item.build_trace.rotation_reflection}",
+                    "Puzzle:",
+                    item.pretty_puzzle(),
+                    "",
+                ])
+            )
+        path.write_text("\n\n".join(blocks), encoding="utf-8")
+        return path
+
+    @staticmethod
+    def _json_ready(value):
+        if isinstance(value, dict):
+            return {str(k): QuantumEntropySudokuGenerator._json_ready(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [QuantumEntropySudokuGenerator._json_ready(v) for v in value]
+        if isinstance(value, tuple):
+            return [QuantumEntropySudokuGenerator._json_ready(v) for v in value]
+        return value
+
+
+def demo_4x4() -> List[GeneratedSudoku]:
+    generator = QuantumEntropySudokuGenerator(
+        n=2,
+        entropy_cfg=IBMEntropyConfig(use_ibm=False),
+        seed=42,
+        storage_path="sudoku_generated_store_20260517.json",
+    )
+    items = generator.generate(n_puzzles=3, difficulty_target="Medium")
+    generator.export_json(items, "sudoku_generated_metadata_20260517.json")
+    generator.export_csv(items, "sudoku_generated_metadata_20260517.csv")
+    generator.export_txt(items, "sudoku_generated_puzzles_20260517.txt")
+    for item in items:
+        print(item.pretty_puzzle())
+        print()
+    return items
+
+
+def demo_9x9_os_entropy() -> List[GeneratedSudoku]:
+    generator = QuantumEntropySudokuGenerator(
+        n=3,
+        entropy_cfg=IBMEntropyConfig(use_ibm=False),
+        seed=42,
+        storage_path="sudoku_generated_store_20260517.json",
+    )
+    items = generator.generate(n_puzzles=2, difficulty_target="Medium")
+    generator.export_json(items, "sudoku_generated_metadata_20260517.json")
+    generator.export_csv(items, "sudoku_generated_metadata_20260517.csv")
+    generator.export_txt(items, "sudoku_generated_puzzles_20260517.txt")
+    return items
+
+
+def demo_9x9_ibm(token: str, backend: str = "ibm_brisbane") -> List[GeneratedSudoku]:
+    generator = QuantumEntropySudokuGenerator(
+        n=3,
+        entropy_cfg=IBMEntropyConfig(use_ibm=True, token=token, backend=backend),
+        seed=42,
+        storage_path="sudoku_generated_store_20260517.json",
+    )
+    items = generator.generate(n_puzzles=2, difficulty_target="Medium")
+    generator.export_json(items, "sudoku_generated_metadata_20260517.json")
+    generator.export_csv(items, "sudoku_generated_metadata_20260517.csv")
+    generator.export_txt(items, "sudoku_generated_puzzles_20260517.txt")
+    return items
+
+
+if __name__ == "__main__":
+    demo_4x4()
