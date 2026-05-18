@@ -1,0 +1,596 @@
+"""
+================================================================================
+  Quantum Portfolio Optimizer  |  IBM Quantum + Qiskit                    v1
+================================================================================
+  Connects to the buy_sell_optimization_notebook pipeline.
+
+  §1  ReturnDataLoader      – load CSVs from notebook, build return matrix
+  §2  AssetScreener         – top-20 Sharpe-like selection (replicates notebook)
+  §3  PortfolioQUBO         – encode min-CVaR / max-Sharpe / min-VaR as QUBO
+  §4  QuantumPortfolioSolver– QAOA optimizer (local StatevectorSampler or IBM)
+  §5  ClassicalBenchmark    – scipy baselines for all three objectives
+  §6  BuySellLabeller       – target weights → Buy/Add/Hold/Reduce/Sell-Avoid
+  §7  RiskMetrics           – VaR, CVaR, Sharpe, drawdown, Calmar
+  §8  PortfolioFactory      – full pipeline: CSV/synthetic → labels + comparison
+
+  pip install: qiskit>=1.1 qiskit-ibm-runtime>=0.22 qiskit-optimization>=0.6
+               qiskit-algorithms>=0.3 scipy numpy pandas
+
+  Data contract (from notebook)
+  ─────────────────────────────────────────────────────────────────────────────
+  buy_sell_optimization_actions.csv
+      ticker | current_weight | target_weight | action | [r_YYYY-MM columns]
+
+  buy_sell_optimization_strategy_stats.csv
+      strategy | sharpe | cvar_95 | var_95 | mean_return | vol
+
+  No CSV files?  Call PortfolioFactory.from_synthetic() — fully self-contained.
+================================================================================
+"""
+
+from __future__ import annotations
+
+import itertools
+import logging
+import warnings
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+from scipy.optimize import minimize
+from scipy.stats import norm
+
+from qiskit.primitives import StatevectorSampler
+from qiskit_ibm_runtime import QiskitRuntimeService
+from qiskit_ibm_runtime import SamplerV2 as IBMSampler
+from qiskit_optimization import QuadraticProgram
+from qiskit_optimization.converters import QuadraticProgramToQubo
+from qiskit_optimization.algorithms import MinimumEigenOptimizer
+from qiskit_algorithms import QAOA
+from qiskit_algorithms.optimizers import COBYLA
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+log = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  §1  RETURN DATA LOADER
+# ══════════════════════════════════════════════════════════════════════════════
+
+class ReturnDataLoader:
+    """
+    Load the two CSVs from the notebook and expose a (T, N) return matrix.
+
+    If monthly return columns (pattern r_YYYY-MM) exist in the actions CSV
+    they are used directly.  Otherwise returns are reconstructed from
+    mean_return + vol in the stats CSV (60-month simulation).
+    """
+
+    def __init__(
+        self,
+        actions_path: str = "/mnt/data/buy_sell_optimization_actions.csv",
+        stats_path:   str = "/mnt/data/buy_sell_optimization_strategy_stats.csv",
+    ):
+        self.actions_path = Path(actions_path)
+        self.stats_path   = Path(stats_path)
+
+    def load(self) -> Tuple[pd.DataFrame, pd.DataFrame, np.ndarray, List[str]]:
+        if not self.actions_path.exists() or not self.stats_path.exists():
+            raise FileNotFoundError(
+                "CSV files not found. Use PortfolioFactory.from_synthetic()."
+            )
+        actions = pd.read_csv(self.actions_path)
+        stats   = pd.read_csv(self.stats_path)
+        tickers = actions["ticker"].tolist() if "ticker" in actions.columns else []
+        ret_cols = [c for c in actions.columns if c.startswith("r_")]
+        if ret_cols and tickers:
+            returns = actions[ret_cols].values.T.astype(float)
+        else:
+            log.warning("No monthly columns — reconstructing from stats.")
+            returns = self._reconstruct(stats, n_months=60)
+            tickers = tickers or [f"ASSET_{i}" for i in range(returns.shape[1])]
+        log.info(f"Loaded: {returns.shape[1]} assets, {returns.shape[0]} months.")
+        return actions, stats, returns, tickers
+
+    @staticmethod
+    def _reconstruct(stats: pd.DataFrame, n_months: int = 60) -> np.ndarray:
+        rng = np.random.default_rng(42)
+        n   = len(stats)
+        mu  = stats["mean_return"].values if "mean_return" in stats.columns else np.full(n, 0.006)
+        vol = stats["vol"].values         if "vol"         in stats.columns else np.full(n, 0.04)
+        F   = rng.standard_normal(n_months)
+        B   = rng.uniform(0.3, 0.9, n)
+        return F[:, None] * B * 0.02 + rng.standard_normal((n_months, n)) * vol + mu / 12
+
+    @staticmethod
+    def from_synthetic(n_assets=30, n_months=60, seed=42):
+        rng     = np.random.default_rng(seed)
+        tickers = [f"TKR{i:02d}" for i in range(n_assets)]
+        F  = rng.standard_normal((n_months, 3))
+        B  = rng.uniform(-0.5, 1.2, (n_assets, 3))
+        mu = rng.uniform(0.002, 0.012, n_assets)
+        vol= rng.uniform(0.02, 0.08,  n_assets)
+        returns = F @ B.T * 0.015 + rng.standard_normal((n_months, n_assets)) * vol + mu
+        actions = pd.DataFrame({
+            "ticker":         tickers,
+            "current_weight": np.round(np.ones(n_assets) / n_assets, 4),
+            "target_weight":  np.zeros(n_assets),
+            "action":         ["Hold"] * n_assets,
+        })
+        stats = pd.DataFrame({
+            "ticker":      tickers,
+            "mean_return": mu, "vol": vol,
+            "sharpe":      mu / vol,
+            "var_95":      -norm.ppf(0.05) * vol,
+            "cvar_95":     norm.pdf(norm.ppf(0.05)) / 0.05 * vol,
+        })
+        return actions, stats, returns, tickers
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  §2  ASSET SCREENER
+# ══════════════════════════════════════════════════════════════════════════════
+
+class AssetScreener:
+    """Select top-N assets by annualised Sharpe-like score — replicates notebook."""
+
+    def __init__(self, top_n: int = 20):
+        self.top_n = top_n
+
+    def screen(self, returns: np.ndarray, tickers: List[str]):
+        mu     = returns.mean(axis=0)
+        sig    = returns.std(axis=0, ddof=1).clip(min=1e-9)
+        sharpe = (mu / sig) * np.sqrt(12)
+        scores = pd.DataFrame({
+            "ticker":        tickers,
+            "mean_monthly":  np.round(mu, 6),
+            "vol_monthly":   np.round(sig, 6),
+            "sharpe_annual": np.round(sharpe, 4),
+        }).sort_values("sharpe_annual", ascending=False).reset_index(drop=True)
+
+        top_tickers = scores["ticker"].iloc[:self.top_n].tolist()
+        orig_idx    = [tickers.index(t) for t in top_tickers]
+        log.info(f"Screened {len(tickers)} → {len(top_tickers)} assets.")
+        return returns[:, orig_idx], top_tickers, scores
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  §3  PORTFOLIO QUBO
+# ══════════════════════════════════════════════════════════════════════════════
+
+class PortfolioQUBO:
+    """
+    Encode long-only portfolio optimisation as a QUBO.
+
+    Weight encoding: each asset i gets K binary variables.
+    Weight_i = Σ_k (2^k / (2^K-1)) * w_{i,k}   (binary encoding)
+    Total vars: N * K
+
+    Objectives:  "cvar" | "sharpe" | "var"
+    Constraints: budget (Σw=1) + max-weight (w_i <= w_max), both as penalties.
+
+    CVaR QUBO approximation
+    -----------------------
+    True CVaR optimisation requires auxiliary variables for the tail samples,
+    which blows up variable count for large T.  We use the parametric normal
+    approximation:  CVaR_alpha(w) ≈ -w'μ + z_cvar * sqrt(w'Σw)
+    where z_cvar = φ(Φ⁻¹(α)) / (1-α).  This is exact when returns are
+    normal and a conservative upper bound otherwise.
+    """
+
+    def __init__(self, returns, tickers, K=3, alpha=0.95, w_max=0.25,
+                 penalty=50.0, objective="cvar"):
+        self.returns   = returns
+        self.tickers   = tickers
+        self.T, self.N = returns.shape
+        self.K, self.alpha, self.w_max  = K, alpha, w_max
+        self.penalty   = penalty
+        self.objective = objective
+        self.mu        = returns.mean(axis=0)
+        self.cov       = np.cov(returns.T, ddof=1)
+
+    def _vn(self, i, k): return f"w_{i}_{k}"
+    def _wc(self, k):    return (2**k) / ((2**self.K) - 1)
+
+    def _reset(self):
+        self._C = 0.0; self._L = {}; self._Q = {}
+
+    def _al(self, v, c):
+        self._L[v] = self._L.get(v, 0.0) + c
+
+    def _aq(self, a, b, c):
+        key = tuple(sorted((a, b)))
+        self._Q[key] = self._Q.get(key, 0.0) + c
+
+    def _quad_form(self, M, scale):
+        """Add scale * w'Mw to the objective."""
+        for i in range(self.N):
+            for j in range(self.N):
+                for ki in range(self.K):
+                    for kj in range(self.K):
+                        c = scale * M[i, j] * self._wc(ki) * self._wc(kj)
+                        if i == j and ki == kj:
+                            self._al(self._vn(i, ki), c)
+                        else:
+                            self._aq(self._vn(i, ki), self._vn(j, kj), c)
+
+    def _linear_form(self, v, scale):
+        """Add scale * w'v to the objective."""
+        for i in range(self.N):
+            for k in range(self.K):
+                self._al(self._vn(i, k), scale * v[i] * self._wc(k))
+
+    def _budget_penalty(self):
+        """(Σ_i Σ_k wc_k * w_{i,k} - 1)^2 * penalty."""
+        P  = self.penalty
+        av = [(self._vn(i, k), self._wc(k))
+              for i in range(self.N) for k in range(self.K)]
+        self._C += P
+        for v, c in av:
+            self._al(v, P * (c**2 - 2*c))
+        for (v1,c1),(v2,c2) in itertools.combinations(av, 2):
+            self._aq(v1, v2, 2*P*c1*c2)
+
+    def _maxweight_penalty(self):
+        """Soft penalty for each asset's weight exceeding w_max."""
+        P = self.penalty * 0.5
+        for i in range(self.N):
+            av = [(self._vn(i,k), self._wc(k)) for k in range(self.K)]
+            self._C += P * self.w_max**2
+            for v, c in av:
+                self._al(v, P*(c**2 - 2*c*self.w_max))
+            for (v1,c1),(v2,c2) in itertools.combinations(av, 2):
+                self._aq(v1, v2, 2*P*c1*c2)
+
+    def build(self) -> QuadraticProgram:
+        self._reset()
+        qp = QuadraticProgram(name=f"Port_{self.objective}")
+        for i in range(self.N):
+            for k in range(self.K):
+                qp.binary_var(self._vn(i, k))
+
+        if self.objective == "cvar":
+            z = norm.pdf(norm.ppf(self.alpha)) / (1 - self.alpha)
+            self._linear_form(-self.mu, 1.0)
+            self._quad_form(self.cov, z)
+        elif self.objective == "sharpe":
+            self._linear_form(-self.mu, 1.0)   # negate → minimise -Sharpe
+            self._quad_form(self.cov, 1.0)
+        elif self.objective == "var":
+            z = norm.ppf(self.alpha)
+            self._linear_form(-self.mu, 1.0)
+            self._quad_form(self.cov, z)
+        else:
+            raise ValueError(f"Unknown objective '{self.objective}'")
+
+        self._budget_penalty()
+        self._maxweight_penalty()
+        qp.minimize(constant=self._C, linear=self._L, quadratic=self._Q)
+        log.info(f"QUBO: {self.N*self.K} vars, objective={self.objective}")
+        return qp
+
+    def decode_weights(self, x) -> np.ndarray:
+        w = np.zeros(self.N)
+        for i in range(self.N):
+            for k in range(self.K):
+                idx = i*self.K + k
+                if idx < len(x) and round(x[idx]) == 1:
+                    w[i] += self._wc(k)
+        s = w.sum()
+        return w / s if s > 1e-9 else np.ones(self.N) / self.N
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  §4  QUANTUM PORTFOLIO SOLVER
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class QuantumSolverConfig:
+    reps: int = 3; shots: int = 4096; max_iter: int = 300
+    use_ibm: bool = False; ibm_channel: str = "ibm_quantum"
+    ibm_token: str = ""; ibm_backend: str = "ibm_brisbane"
+
+@dataclass
+class PortfolioResult:
+    objective: str; weights: np.ndarray; tickers: List[str]
+    sharpe: float; cvar_95: float; var_95: float
+    mean_return: float; volatility: float; solver: str
+    n_qubits: int = 0; solver_trace: dict = field(default_factory=dict)
+
+    @property
+    def weight_series(self): return pd.Series(self.weights, index=self.tickers)
+
+
+class QuantumPortfolioSolver:
+    """QAOA-based solver. N=20, K=3 → 60 QUBO vars (local sim feasible)."""
+
+    def __init__(self, cfg: QuantumSolverConfig):
+        self.cfg = cfg
+        if cfg.use_ibm:
+            svc = QiskitRuntimeService(channel=cfg.ibm_channel, token=cfg.ibm_token)
+            self._sampler = IBMSampler(svc.backend(cfg.ibm_backend))
+        else:
+            self._sampler = StatevectorSampler()
+
+    def solve(self, qb: PortfolioQUBO, objective: str) -> PortfolioResult:
+        qb.objective = objective
+        qubo = QuadraticProgramToQubo().convert(qb.build())
+        log.info(f"QAOA {objective}: {qb.N*qb.K} vars, p={self.cfg.reps} …")
+        result = MinimumEigenOptimizer(
+            QAOA(sampler=self._sampler,
+                 optimizer=COBYLA(maxiter=self.cfg.max_iter),
+                 reps=self.cfg.reps)
+        ).solve(qubo)
+        w = qb.decode_weights(result.x)
+        m = RiskMetrics.compute(qb.returns, w)
+        return PortfolioResult(objective=objective, weights=w,
+                               tickers=qb.tickers, solver="quantum",
+                               n_qubits=qb.N*qb.K, **m)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  §5  CLASSICAL BENCHMARK
+# ══════════════════════════════════════════════════════════════════════════════
+
+class ClassicalBenchmark:
+    """Scipy SLSQP solvers for CVaR, Sharpe, VaR — baseline for QAOA."""
+
+    def __init__(self, returns, tickers, alpha=0.95, w_max=0.25):
+        self.returns, self.tickers = returns, tickers
+        self.T, self.N = returns.shape
+        self.alpha, self.w_max = alpha, w_max
+        self.mu  = returns.mean(axis=0)
+        self.cov = np.cov(returns.T, ddof=1)
+
+    def _cb(self):
+        return ([(0, self.w_max)]*self.N,
+                [{"type":"eq","fun":lambda w: w.sum()-1}])
+
+    def _result(self, w, obj, solver):
+        w = np.clip(w, 0, self.w_max); w /= w.sum()
+        return PortfolioResult(objective=obj, weights=w, tickers=self.tickers,
+                               solver=solver, **RiskMetrics.compute(self.returns, w))
+
+    def solve_cvar(self):
+        bounds, cons = self._cb()
+        def f(w):
+            r = self.returns @ w
+            q = np.percentile(r, (1-self.alpha)*100)
+            t = r[r <= q]
+            return (-t.mean() if len(t) else -q)
+        res = minimize(f, np.ones(self.N)/self.N, method="SLSQP",
+                       bounds=bounds, constraints=cons, options={"maxiter":1000})
+        return self._result(res.x, "cvar", "classical_cvar")
+
+    def solve_sharpe(self):
+        bounds, cons = self._cb()
+        def f(w):
+            r = self.returns @ w
+            return -r.mean() / (r.std(ddof=1) + 1e-9)
+        res = minimize(f, np.ones(self.N)/self.N, method="SLSQP",
+                       bounds=bounds, constraints=cons, options={"maxiter":1000})
+        return self._result(res.x, "sharpe", "classical_sharpe")
+
+    def solve_var(self):
+        bounds, cons = self._cb()
+        z = norm.ppf(self.alpha)
+        def f(w):
+            return -(self.mu @ w) + z * np.sqrt(w @ self.cov @ w + 1e-12)
+        res = minimize(f, np.ones(self.N)/self.N, method="SLSQP",
+                       bounds=bounds, constraints=cons, options={"maxiter":1000})
+        return self._result(res.x, "var", "classical_var")
+
+    def equal_weight(self):
+        return self._result(np.ones(self.N)/self.N, "equal_weight", "equal_weight")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  §6  BUY / SELL LABELLER  (replicates notebook logic)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class BuySellLabeller:
+    """
+    Target weights → action labels.
+
+    Thresholds (relative to current weight)
+    ─────────────────────────────────────────
+    delta > +add_thresh  * 2   →  Buy       (High conviction)
+    delta > +add_thresh        →  Buy       (Medium conviction)
+    delta > +hold_thresh       →  Add
+    |delta| <= hold_thresh     →  Hold
+    delta < -hold_thresh       →  Reduce    (Low)
+    delta < -add_thresh        →  Reduce    (Medium/High)
+    target < sell_thresh       →  Sell-Avoid
+    """
+
+    def __init__(self, add_thresh=0.03, hold_thresh=0.01, sell_thresh=0.005):
+        self.add_thresh  = add_thresh
+        self.hold_thresh = hold_thresh
+        self.sell_thresh = sell_thresh
+
+    def label(self, tickers, current_weights, target_weights) -> pd.DataFrame:
+        delta = target_weights - current_weights
+        rows  = []
+        for t, cur, tgt, d in zip(tickers, current_weights, target_weights, delta):
+            if tgt < self.sell_thresh:
+                action, conv = "Sell-Avoid", "High"
+            elif d > self.add_thresh * 2:
+                action, conv = "Buy", "High"
+            elif d > self.add_thresh:
+                action, conv = "Buy", "Medium"
+            elif d > self.hold_thresh:
+                action, conv = "Add", "Medium"
+            elif d < -self.add_thresh * 2:
+                action, conv = "Reduce", "High"
+            elif d < -self.add_thresh:
+                action, conv = "Reduce", "Medium"
+            elif d < -self.hold_thresh:
+                action, conv = "Reduce", "Low"
+            else:
+                action, conv = "Hold", "Low"
+            rows.append({"ticker":t, "current_weight":round(cur,4),
+                         "target_weight":round(tgt,4), "delta":round(d,4),
+                         "action":action, "conviction":conv})
+        return (pd.DataFrame(rows)
+                .sort_values(["action","conviction"])
+                .reset_index(drop=True))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  §7  RISK METRICS
+# ══════════════════════════════════════════════════════════════════════════════
+
+class RiskMetrics:
+
+    @staticmethod
+    def compute(returns, weights, alpha=0.95) -> dict:
+        pr  = returns @ weights
+        mu  = pr.mean(); sig = pr.std(ddof=1)
+        var_q = np.percentile(pr, (1-alpha)*100)
+        tail  = pr[pr <= var_q]
+        cvar  = -tail.mean() if len(tail) else -var_q
+        cum   = (1+pr).cumprod()
+        dd    = ((cum - np.maximum.accumulate(cum)) / np.maximum.accumulate(cum)).min()
+        return {
+            "mean_return": float(round(mu, 6)),
+            "volatility":  float(round(sig, 6)),
+            "sharpe":      float(round((mu/(sig+1e-12))*np.sqrt(12), 4)),
+            "var_95":      float(round(-var_q, 6)),
+            "cvar_95":     float(round(cvar, 6)),
+            "max_drawdown":float(round(dd, 4)),
+            "calmar":      float(round((mu*12)/(abs(dd)+1e-12), 4)),
+        }
+
+    @staticmethod
+    def comparison_table(results: List[PortfolioResult]) -> pd.DataFrame:
+        return pd.DataFrame([{
+            "solver":r.solver,"objective":r.objective,
+            "sharpe":r.sharpe,"cvar_95":r.cvar_95,"var_95":r.var_95,
+            "mean_return":r.mean_return,"volatility":r.volatility,
+            "n_qubits":r.n_qubits,
+        } for r in results]).sort_values("sharpe", ascending=False).reset_index(drop=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  §8  PORTFOLIO FACTORY  (full pipeline)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class PortfolioFactory:
+    """
+    Full pipeline mirroring the notebook:
+    CSV / synthetic → screen → QUBO → QAOA + classical → labels → report
+    """
+
+    def __init__(self, actions_path="/mnt/data/buy_sell_optimization_actions.csv",
+                 stats_path="/mnt/data/buy_sell_optimization_strategy_stats.csv",
+                 top_n=20, K=3, alpha=0.95, w_max=0.25,
+                 quantum_cfg=None, use_quantum=True):
+        self.top_n, self.K, self.alpha, self.w_max = top_n, K, alpha, w_max
+        self.quantum_cfg = quantum_cfg or QuantumSolverConfig()
+        self.use_quantum = use_quantum
+        self.loader   = ReturnDataLoader(actions_path, stats_path)
+        self.screener = AssetScreener(top_n=top_n)
+        self.labeller = BuySellLabeller()
+
+    def run(self):
+        actions, stats, returns, tickers = self.loader.load()
+        return self._execute(returns, tickers, actions)
+
+    @classmethod
+    def from_synthetic(cls, n_assets=30, n_months=60, top_n=20, K=3,
+                       use_quantum=True, seed=42):
+        factory = cls(top_n=top_n, K=K, use_quantum=use_quantum)
+        actions, stats, returns, tickers = ReturnDataLoader.from_synthetic(
+            n_assets, n_months, seed)
+        return factory._execute(returns, tickers, actions)
+
+    def _execute(self, returns, tickers, actions):
+        sc_ret, sc_tick, scores = self.screener.screen(returns, tickers)
+
+        # Current weights
+        cur_w = np.ones(len(sc_tick)) / len(sc_tick)
+        if "ticker" in actions.columns and "current_weight" in actions.columns:
+            cw = dict(zip(actions["ticker"], actions["current_weight"]))
+            cur_w = np.array([cw.get(t, 1/len(sc_tick)) for t in sc_tick])
+            cur_w /= cur_w.sum()
+
+        # Classical baselines
+        bench   = ClassicalBenchmark(sc_ret, sc_tick, self.alpha, self.w_max)
+        results = [bench.equal_weight(),
+                   bench.solve_cvar(),
+                   bench.solve_sharpe(),
+                   bench.solve_var()]
+        log.info("Classical baselines done.")
+
+        # QAOA (optional)
+        if self.use_quantum:
+            qb     = PortfolioQUBO(sc_ret, sc_tick, self.K, self.alpha, self.w_max)
+            solver = QuantumPortfolioSolver(self.quantum_cfg)
+            for obj in ["cvar", "sharpe", "var"]:
+                try:
+                    results.append(solver.solve(qb, obj))
+                except Exception as e:
+                    log.warning(f"QAOA {obj} failed: {e}")
+
+        # Label with best classical Sharpe result (notebook behaviour)
+        best   = max((r for r in results if r.solver.startswith("classical")),
+                     key=lambda r: r.sharpe)
+        labels = self.labeller.label(sc_tick, cur_w, best.weights)
+        comparison = RiskMetrics.comparison_table(results)
+        return results, labels, comparison
+
+    @staticmethod
+    def print_report(labels, comparison):
+        print("\n" + "="*65)
+        print("  QUANTUM PORTFOLIO OPTIMIZER  |  Buy / Sell Actions")
+        print("="*65)
+        for action in ["Buy","Add","Hold","Reduce","Sell-Avoid"]:
+            sub = labels[labels["action"]==action]
+            if sub.empty: continue
+            print(f"\n── {action} ({len(sub)}) ──")
+            print(sub[["ticker","current_weight","target_weight",
+                        "delta","conviction"]].to_string(index=False))
+        print("\n" + "="*65)
+        print("  STRATEGY COMPARISON")
+        print("="*65)
+        print(comparison[["solver","objective","sharpe","cvar_95",
+                           "var_95","mean_return","volatility"]].to_string(index=False))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DEMOS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def demo_synthetic(use_quantum=False):
+    """Full pipeline on synthetic data — no CSV files required.
+    Set use_quantum=True when Qiskit is installed (N=20,K=3 → 60 QUBO vars)."""
+    print("="*65)
+    print("  Quantum Portfolio Optimizer  —  synthetic demo")
+    print("="*65)
+    results, labels, comparison = PortfolioFactory.from_synthetic(
+        n_assets=30, n_months=60, top_n=20, K=3,
+        use_quantum=use_quantum, seed=42)
+    PortfolioFactory.print_report(labels, comparison)
+    return results, labels, comparison
+
+
+def demo_from_csv(actions_path="/mnt/data/buy_sell_optimization_actions.csv",
+                  stats_path="/mnt/data/buy_sell_optimization_strategy_stats.csv",
+                  use_quantum=False, ibm_token="", ibm_backend="ibm_brisbane"):
+    """Run against the actual notebook CSV files.
+    Flip use_quantum=True and set ibm_token for IBM cloud."""
+    q_cfg = QuantumSolverConfig(reps=3, shots=8192, use_ibm=bool(ibm_token),
+                                ibm_token=ibm_token, ibm_backend=ibm_backend)
+    factory = PortfolioFactory(actions_path, stats_path,
+                               top_n=20, K=3, quantum_cfg=q_cfg,
+                               use_quantum=use_quantum)
+    results, labels, comparison = factory.run()
+    PortfolioFactory.print_report(labels, comparison)
+    return results, labels, comparison
+
+
+if __name__ == "__main__":
+    results, labels, comparison = demo_synthetic(use_quantum=False)
